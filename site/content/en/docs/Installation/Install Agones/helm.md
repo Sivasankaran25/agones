@@ -8,7 +8,7 @@ description: >
 
 ## Prerequisites
 
-- [Helm](https://helm.sh/) package manager 4.1.1+
+- [Helm](https://helm.sh/) package manager 4.1.3+
 - [Supported Kubernetes Cluster]({{< relref "../_index.md#usage-requirements" >}})
 
 ## Helm 3
