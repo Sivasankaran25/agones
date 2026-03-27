@@ -29,7 +29,7 @@ RUN gem install fpm && \
 # install go
 WORKDIR /usr/local
 ENV GO_VERSION=1.25.0
-ENV GOPATH /go
+ENV GOPATH=/go
 ENV GO111MODULE=on
 RUN wget -q https://dl.google.com/go/go${GO_VERSION}.linux-amd64.tar.gz && \
     tar -xzf go${GO_VERSION}.linux-amd64.tar.gz && rm go${GO_VERSION}.linux-amd64.tar.gz && mkdir ${GOPATH}
@@ -45,14 +45,14 @@ RUN echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] http://packages.c
     echo "source /usr/share/google-cloud-sdk/completion.bash.inc" >> /root/.bashrc
 
 # update the path for go
-ENV PATH /usr/local/go/bin:/go/bin:$PATH
+ENV PATH=/usr/local/go/bin:/go/bin:$PATH
 
 # install go tooling for development, building and testing
 RUN go install golang.org/x/tools/cmd/goimports@latest && \
     go install golang.org/x/pkgsite/cmd/pkgsite@latest
 
 # the kubernetes version for the file
-ENV KUBERNETES_VER 1.33.5
+ENV KUBERNETES_VER=1.33.5
 
 # overwrite kubectl as we want a specific version
 RUN curl -LO https://dl.k8s.io/release/v${KUBERNETES_VER}/bin/linux/amd64/kubectl && \
@@ -96,7 +96,7 @@ RUN curl -s https://get.extism.org/cli | sh -s -- -v v1.6.2 -y && \
 #     \_/\_/ \___|_.__/|___/_|\__\___|
 #
 
-ENV HUGO_VER 0.152.2
+ENV HUGO_VER=0.152.2
 RUN mkdir /tmp/hugo && \
     wget -q -O /tmp/hugo/hugo.tar.gz https://github.com/gohugoio/hugo/releases/download/v${HUGO_VER}/hugo_extended_${HUGO_VER}_Linux-64bit.tar.gz && \
     tar -zxvf /tmp/hugo/hugo.tar.gz -C /tmp/hugo/ && \
