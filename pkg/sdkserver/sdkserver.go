@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -252,6 +253,10 @@ func (s *SDKServer) Run(ctx context.Context) error {
 	s.ctx = ctx
 	// we have the gameserver details now
 	s.gsWaitForSync.Done()
+
+	if runtime.FeatureEnabled(runtime.FeatureGameServerScheduledRestart) {
+		go s.watchRestartAnnotation(ctx)
+	}
 
 	gs, err := s.gameServer()
 	if err != nil {
@@ -1558,6 +1563,30 @@ func (s *SDKServer) updateConnectedPlayers(ctx context.Context) error {
 	}
 
 	return err
+}
+
+func (s *SDKServer) watchRestartAnnotation(ctx context.Context) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			gs, err := s.gameServerLister.GameServers(s.namespace).Get(s.gameServerName)
+			if err != nil {
+				continue
+			}
+			if _, ok := gs.Annotations[agonesv1.GameServerRestartPendingSinceAnnotation]; ok {
+				if gs.Status.State == agonesv1.GameServerStateReady {
+					s.logger.Info("Restart annotation detected and server is idle; exiting cleanly for in-place restart")
+					// Signal the game server process via SIGTERM if we are the wrapper,
+					// or simply exit the SDK sidecar to trigger a cascading restart.
+					os.Exit(0)
+				}
+			}
+		}
+	}
 }
 
 // NewSDKServerContext returns a Context that cancels when SIGTERM or os.Interrupt
