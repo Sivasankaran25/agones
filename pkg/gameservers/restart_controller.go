@@ -34,12 +34,9 @@ import (
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	// ✅ FIX 2: import labels (not cache) for listing all objects
 	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 
-	// ✅ FIX 1: import k8s client-go scheme — this is what all Agones controllers use
 	"k8s.io/client-go/kubernetes/scheme"
 	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/tools/cache"
@@ -62,11 +59,14 @@ type RestartController struct {
 // NewRestartController returns a new RestartController wired to the provided
 // informer factories. Matches the constructor pattern of all Agones controllers
 // (see health_controller.go, succeeded_controller.go).
+//
+// Note: unlike other controllers, RestartController does not need kubeInformerFactory
+// because it only watches GameServer objects (Agones CRDs), not core k8s resources.
+// The parameter is intentionally omitted to avoid the revive unused-parameter lint warning.
 func NewRestartController(
 	health healthcheck.Handler,
 	kubeClient kubernetes.Interface,
 	agonesClient versioned.Interface,
-	kubeInformerFactory informers.SharedInformerFactory,
 	agonesInformerFactory externalversions.SharedInformerFactory,
 ) *RestartController {
 
@@ -81,16 +81,13 @@ func NewRestartController(
 
 	c.baseLogger = runtime.NewLoggerWithType(c)
 
-	// ✅ FIX 1: Use scheme.Scheme — the same pattern used by every Agones controller.
-	// Reference: pkg/gameservers/controller.go
-	//   eventBroadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{...})
 	eventBroadcaster := record.NewBroadcaster()
 	eventBroadcaster.StartLogging(c.baseLogger.Debugf)
 	eventBroadcaster.StartRecordingToSink(&typedcorev1.EventSinkImpl{
 		Interface: kubeClient.CoreV1().Events(""),
 	})
 	c.recorder = eventBroadcaster.NewRecorder(
-		scheme.Scheme, // ← NOT agones.SchemeBuilder.Build()
+		scheme.Scheme,
 		corev1.EventSource{Component: "gameserver-restart-controller"},
 	)
 
@@ -151,11 +148,6 @@ func (c *RestartController) Run(ctx context.Context, workers int) error {
 
 // enqueueAll lists ALL GameServers with a RestartPolicy and re-enqueues them.
 func (c *RestartController) enqueueAll() {
-	// ✅ FIX 2: Use labels.Everything() — NOT cache.Everything.
-	// The Agones lister interface requires a labels.Selector argument:
-	//   List(selector labels.Selector) ([]*v1.GameServer, error)
-	// labels.Everything() is the selector that matches all objects.
-	// Reference: official Agones access-api docs example and all existing listers.
 	gsList, err := c.gsLister.List(labels.Everything())
 	if err != nil {
 		c.baseLogger.WithError(err).Error("Failed to list GameServers for restart re-enqueue")

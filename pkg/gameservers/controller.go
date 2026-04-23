@@ -158,7 +158,7 @@ func NewController(
 		migrationController:      NewMigrationController(health, kubeClient, agonesClient, kubeInformerFactory, agonesInformerFactory, controllerHooks.SyncPodPortsToGameServer),
 		missingPodController:     NewMissingPodController(health, kubeClient, agonesClient, kubeInformerFactory, agonesInformerFactory),
 		succeededController:      NewSucceededController(health, kubeClient, agonesClient, kubeInformerFactory, agonesInformerFactory),
-		restartController:        NewRestartController(health, kubeClient, agonesClient, kubeInformerFactory, agonesInformerFactory),
+		restartController:        NewRestartController(health, kubeClient, agonesClient, agonesInformerFactory),
 	}
 
 	c.baseLogger = runtime.NewLoggerWithType(c)

@@ -1567,24 +1567,44 @@ func (s *SDKServer) updateConnectedPlayers(ctx context.Context) error {
 
 func (s *SDKServer) watchRestartAnnotation(ctx context.Context) {
 	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
+			ticker.Stop() // explicit stop on clean shutdown
 			return
+
 		case <-ticker.C:
 			gs, err := s.gameServerLister.GameServers(s.namespace).Get(s.gameServerName)
 			if err != nil {
+				s.logger.WithError(err).Warn("watchRestartAnnotation: could not get GameServer")
 				continue
 			}
-			if _, ok := gs.Annotations[agonesv1.GameServerRestartPendingSinceAnnotation]; ok {
-				if gs.Status.State == agonesv1.GameServerStateReady {
-					s.logger.Info("Restart annotation detected and server is idle; exiting cleanly for in-place restart")
-					// Signal the game server process via SIGTERM if we are the wrapper,
-					// or simply exit the SDK sidecar to trigger a cascading restart.
-					os.Exit(0)
-				}
+
+			// Only act when the RestartController has set the pending annotation.
+			if _, ok := gs.Annotations[agonesv1.GameServerRestartPendingSinceAnnotation]; !ok {
+				continue
 			}
+
+			// Gate: server must be idle (Ready, no players).
+			if gs.Status.State != agonesv1.GameServerStateReady {
+				s.logger.Debug("watchRestartAnnotation: restart pending but server not Ready; waiting")
+				continue
+			}
+			if gs.Status.Players != nil && gs.Status.Players.Count > 0 {
+				s.logger.WithField("players", gs.Status.Players.Count).
+					Debug("watchRestartAnnotation: restart pending but players connected; waiting")
+				continue
+			}
+
+			// All conditions met — exit cleanly so Kubernetes restarts the container.
+			s.logger.Info("watchRestartAnnotation: conditions met, exiting for in-place restart")
+			s.recorder.Event(gs,
+				corev1.EventTypeNormal,
+				"ScheduledRestartExec",
+				"SDK sidecar exiting cleanly for scheduled in-place container restart",
+			)
+			ticker.Stop()
+			os.Exit(0)
 		}
 	}
 }

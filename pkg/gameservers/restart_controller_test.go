@@ -30,7 +30,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation/field"
-	k8sinformers "k8s.io/client-go/informers"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 )
@@ -55,8 +54,6 @@ const (
 
 func enableRestartFeatureGate(t *testing.T) {
 	t.Helper()
-	// Use typed constant now that it is registered in features.go:
-	//   FeatureGameServerScheduledRestart Feature = "GameServerScheduledRestart"
 	err := runtime.ParseFeatures(string(runtime.FeatureGameServerScheduledRestart) + "=true")
 	require.NoError(t, err,
 		"Failed to enable %s — did you add it to featureDefaults in features.go?",
@@ -76,14 +73,12 @@ func newTestRestartController(t *testing.T) (
 
 	fakeAgonesClient := fake.NewSimpleClientset()
 	fakeKubeClient := k8sfake.NewSimpleClientset()
-	kubeInformerFactory := k8sinformers.NewSharedInformerFactory(fakeKubeClient, 0)
 	agonesInformerFactory := externalversions.NewSharedInformerFactory(fakeAgonesClient, 0)
 
 	c := NewRestartController(
 		healthcheck.NewHandler(),
 		fakeKubeClient,
 		fakeAgonesClient,
-		kubeInformerFactory,
 		agonesInformerFactory,
 	)
 	return c, fakeAgonesClient, agonesInformerFactory
@@ -119,6 +114,27 @@ func seedLister(t *testing.T, factory externalversions.SharedInformerFactory, gs
 	require.NoError(t, err, "failed to seed GS into informer store")
 }
 
+func runReconcile(
+	t *testing.T,
+	c *RestartController,
+	fakeClient *fake.Clientset,
+	factory externalversions.SharedInformerFactory,
+	gs *agonesv1.GameServer,
+) *agonesv1.GameServer {
+	t.Helper()
+
+	seedLister(t, factory, gs)
+	_, err := fakeClient.AgonesV1().GameServers(testNamespace).Create(
+		context.Background(), gs, metav1.CreateOptions{},
+	)
+	require.NoError(t, err)
+	fakeClient.ClearActions() // only count actions from reconcileRestart
+
+	require.NoError(t, c.reconcileRestart(context.Background(), gs))
+
+	return lastUpdateGS(t, fakeClient)
+}
+
 func lastUpdateGS(t *testing.T, fakeClient *fake.Clientset) *agonesv1.GameServer {
 	t.Helper()
 	actions := fakeClient.Actions()
@@ -139,63 +155,37 @@ func lastUpdateGS(t *testing.T, fakeClient *fake.Clientset) *agonesv1.GameServer
 func TestNoRestartBeforeWindow(t *testing.T) {
 	c, fakeClient, factory := newTestRestartController(t)
 
-	gs := newReadyGS(&agonesv1.RestartPolicy{
-		Schedule: neverCron, // next fire = Jan 1st, always in future
-	})
-	// Anchor = creation time (now) → nextRestart = future Jan 1st → now.Before(nextRestart)=true
-	gs.CreationTimestamp = metav1.Now()
+	gs := newReadyGS(&agonesv1.RestartPolicy{Schedule: neverCron})
+	gs.CreationTimestamp = metav1.Now() // anchor=now → nextRestart=future Jan 1st
 
-	seedLister(t, factory, gs)
-	_, err := fakeClient.AgonesV1().GameServers(testNamespace).Create(
-		context.Background(), gs, metav1.CreateOptions{},
-	)
-	require.NoError(t, err)
-
-	err = c.reconcileRestart(context.Background(), gs)
-	require.NoError(t, err)
-
-	// updateNextRestartTime was called → one Update action on gameservers
-	updated := lastUpdateGS(t, fakeClient)
+	updated := runReconcile(t, c, fakeClient, factory, gs)
 	require.NotNil(t, updated, "expected one Update call to write next-restart annotation")
 
 	_, pendingSet := updated.Annotations[agonesv1.GameServerRestartPendingSinceAnnotation]
-	assert.False(t, pendingSet,
-		"restart-pending-since must NOT be set before the window opens")
+	assert.False(t, pendingSet, "restart-pending-since must NOT be set before the window opens")
 
 	_, nextSet := updated.Annotations[agonesv1.GameServerNextRestartAnnotation]
-	assert.True(t, nextSet,
-		"next-restart annotation must be written so the controller can track the upcoming window")
+	assert.True(t, nextSet, "next-restart annotation must be written")
 }
 
 func TestRestartWhenIdle(t *testing.T) {
 	c, fakeClient, factory := newTestRestartController(t)
 
 	gs := newReadyGS(&agonesv1.RestartPolicy{Schedule: everyMinuteCron})
-
 	pastAnchor := time.Now().UTC().Add(-2 * time.Minute)
 	gs.Annotations[agonesv1.GameServerNextRestartAnnotation] = pastAnchor.Format(time.RFC3339)
 	gs.Status.State = agonesv1.GameServerStateReady
 	gs.Status.Players = nil
 
-	seedLister(t, factory, gs)
-	_, err := fakeClient.AgonesV1().GameServers(testNamespace).Create(
-		context.Background(), gs, metav1.CreateOptions{},
-	)
-	require.NoError(t, err)
-
-	err = c.reconcileRestart(context.Background(), gs)
-	require.NoError(t, err)
-
-	updated := lastUpdateGS(t, fakeClient)
+	updated := runReconcile(t, c, fakeClient, factory, gs)
 	require.NotNil(t, updated, "expected an Update call (advanceAnchor after idle restart)")
 
 	nextAnnotation, ok := updated.Annotations[agonesv1.GameServerNextRestartAnnotation]
 	assert.True(t, ok, "next-restart annotation must still be present after restart")
 
-	advancedTime, parseErr := time.Parse(time.RFC3339, nextAnnotation)
-	require.NoError(t, parseErr)
-	assert.True(t, advancedTime.After(pastAnchor),
-		"next-restart annotation must be advanced past the old window")
+	advancedTime, err := time.Parse(time.RFC3339, nextAnnotation)
+	require.NoError(t, err)
+	assert.True(t, advancedTime.After(pastAnchor), "next-restart must be advanced past old window")
 
 	_, stillPending := updated.Annotations[agonesv1.GameServerRestartPendingSinceAnnotation]
 	assert.False(t, stillPending, "restart-pending-since must be cleared after successful restart")
@@ -205,30 +195,34 @@ func TestDeferWhenAllocated(t *testing.T) {
 	c, fakeClient, factory := newTestRestartController(t)
 
 	gs := newReadyGS(&agonesv1.RestartPolicy{Schedule: everyMinuteCron})
-
 	pastAnchor := time.Now().UTC().Add(-2 * time.Minute)
 	gs.Annotations[agonesv1.GameServerNextRestartAnnotation] = pastAnchor.Format(time.RFC3339)
 	gs.Status.State = agonesv1.GameServerStateAllocated
 
-	seedLister(t, factory, gs)
-	_, err := fakeClient.AgonesV1().GameServers(testNamespace).Create(
-		context.Background(), gs, metav1.CreateOptions{},
-	)
-	require.NoError(t, err)
-
-	err = c.reconcileRestart(context.Background(), gs)
-	require.NoError(t, err)
-
-	updated := lastUpdateGS(t, fakeClient)
+	updated := runReconcile(t, c, fakeClient, factory, gs)
 	require.NotNil(t, updated, "expected an Update call to annotate restart-pending-since")
 
 	pendingSince, ok := updated.Annotations[agonesv1.GameServerRestartPendingSinceAnnotation]
 	assert.True(t, ok, "restart-pending-since must be set when restart is deferred")
 
-	pendingTime, parseErr := time.Parse(time.RFC3339, pendingSince)
-	require.NoError(t, parseErr)
+	pendingTime, err := time.Parse(time.RFC3339, pendingSince)
+	require.NoError(t, err)
 	assert.WithinDuration(t, time.Now().UTC(), pendingTime, 5*time.Second,
 		"restart-pending-since must record approximately the current time")
+}
+
+func assertAnchorAdvanced(t *testing.T, updated *agonesv1.GameServer, windowOpenedAt time.Time, msg string) {
+	t.Helper()
+	require.NotNil(t, updated, msg)
+
+	nextAnnotation, ok := updated.Annotations[agonesv1.GameServerNextRestartAnnotation]
+	assert.True(t, ok, "next-restart annotation must be present")
+	advancedTime, err := time.Parse(time.RFC3339, nextAnnotation)
+	require.NoError(t, err)
+	assert.True(t, advancedTime.After(windowOpenedAt), "anchor must advance past old window")
+
+	_, stillPending := updated.Annotations[agonesv1.GameServerRestartPendingSinceAnnotation]
+	assert.False(t, stillPending, "restart-pending-since must be cleared")
 }
 
 func TestSoftDeadlineSkip(t *testing.T) {
@@ -239,36 +233,14 @@ func TestSoftDeadlineSkip(t *testing.T) {
 		Schedule:             everyMinuteCron,
 		SoftDeadlineDuration: &softDeadline,
 	})
-
 	windowOpenedAt := time.Now().UTC().Add(-2 * time.Minute)
 	gs.Annotations[agonesv1.GameServerNextRestartAnnotation] = windowOpenedAt.Format(time.RFC3339)
-
-	pendingSinceTime := time.Now().UTC().Add(-2 * time.Hour) // 2h > 1h soft deadline
-	gs.Annotations[agonesv1.GameServerRestartPendingSinceAnnotation] = pendingSinceTime.Format(time.RFC3339)
+	gs.Annotations[agonesv1.GameServerRestartPendingSinceAnnotation] =
+		time.Now().UTC().Add(-2 * time.Hour).Format(time.RFC3339) // 2h > 1h soft deadline
 	gs.Status.State = agonesv1.GameServerStateAllocated
 
-	seedLister(t, factory, gs)
-	_, err := fakeClient.AgonesV1().GameServers(testNamespace).Create(
-		context.Background(), gs, metav1.CreateOptions{},
-	)
-	require.NoError(t, err)
-
-	err = c.reconcileRestart(context.Background(), gs)
-	require.NoError(t, err)
-
-	updated := lastUpdateGS(t, fakeClient)
-	require.NotNil(t, updated, "expected an Update call (advanceAnchor after soft deadline)")
-
-	nextAnnotation, ok := updated.Annotations[agonesv1.GameServerNextRestartAnnotation]
-	assert.True(t, ok)
-
-	advancedTime, parseErr := time.Parse(time.RFC3339, nextAnnotation)
-	require.NoError(t, parseErr)
-	assert.True(t, advancedTime.After(windowOpenedAt),
-		"anchor must advance past old window after soft deadline skip")
-
-	_, stillPending := updated.Annotations[agonesv1.GameServerRestartPendingSinceAnnotation]
-	assert.False(t, stillPending, "restart-pending-since must be cleared after soft deadline skip")
+	updated := runReconcile(t, c, fakeClient, factory, gs)
+	assertAnchorAdvanced(t, updated, windowOpenedAt, "expected Update call (advanceAnchor after soft deadline)")
 }
 
 func TestHardDeadlineForce(t *testing.T) {
@@ -279,36 +251,14 @@ func TestHardDeadlineForce(t *testing.T) {
 		Schedule:             everyMinuteCron,
 		HardDeadlineDuration: &hardDeadline,
 	})
-
 	windowOpenedAt := time.Now().UTC().Add(-2 * time.Minute)
 	gs.Annotations[agonesv1.GameServerNextRestartAnnotation] = windowOpenedAt.Format(time.RFC3339)
-
-	pendingSinceTime := time.Now().UTC().Add(-25 * time.Hour) // 25h > 24h hard deadline
-	gs.Annotations[agonesv1.GameServerRestartPendingSinceAnnotation] = pendingSinceTime.Format(time.RFC3339)
+	gs.Annotations[agonesv1.GameServerRestartPendingSinceAnnotation] =
+		time.Now().UTC().Add(-25 * time.Hour).Format(time.RFC3339) // 25h > 24h hard deadline
 	gs.Status.State = agonesv1.GameServerStateAllocated
 
-	seedLister(t, factory, gs)
-	_, err := fakeClient.AgonesV1().GameServers(testNamespace).Create(
-		context.Background(), gs, metav1.CreateOptions{},
-	)
-	require.NoError(t, err)
-
-	err = c.reconcileRestart(context.Background(), gs)
-	require.NoError(t, err)
-
-	updated := lastUpdateGS(t, fakeClient)
-	require.NotNil(t, updated, "expected an Update call (hard deadline forced restart)")
-
-	nextAnnotation, ok := updated.Annotations[agonesv1.GameServerNextRestartAnnotation]
-	assert.True(t, ok)
-
-	advancedTime, parseErr := time.Parse(time.RFC3339, nextAnnotation)
-	require.NoError(t, parseErr)
-	assert.True(t, advancedTime.After(windowOpenedAt),
-		"anchor must be advanced after hard-deadline forced restart")
-
-	_, stillPending := updated.Annotations[agonesv1.GameServerRestartPendingSinceAnnotation]
-	assert.False(t, stillPending, "restart-pending-since must be cleared after hard deadline restart")
+	updated := runReconcile(t, c, fakeClient, factory, gs)
+	assertAnchorAdvanced(t, updated, windowOpenedAt, "expected Update call (hard deadline forced restart)")
 }
 
 func TestInvalidCronValidation(t *testing.T) {
@@ -326,7 +276,6 @@ func TestInvalidCronValidation(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			gss := &agonesv1.GameServerSpec{
 				RestartPolicy: &agonesv1.RestartPolicy{Schedule: tc.schedule},
@@ -361,35 +310,24 @@ func TestInvalidCronValidation(t *testing.T) {
 		})
 	}
 }
+
 func TestNoRestartForTerminalState(t *testing.T) {
 	for _, state := range []agonesv1.GameServerState{
 		agonesv1.GameServerStateShutdown,
 		agonesv1.GameServerStateError,
 		agonesv1.GameServerStateUnhealthy,
 	} {
-		state := state
 		t.Run(string(state), func(t *testing.T) {
 			c, fakeClient, factory := newTestRestartController(t)
 
 			gs := newReadyGS(&agonesv1.RestartPolicy{Schedule: everyMinuteCron})
 			gs.Status.State = state
-			// Make the window appear open so the only reason to skip is the terminal state.
 			gs.Annotations[agonesv1.GameServerNextRestartAnnotation] =
 				time.Now().UTC().Add(-1 * time.Minute).Format(time.RFC3339)
 
-			seedLister(t, factory, gs)
-			_, err := fakeClient.AgonesV1().GameServers(testNamespace).Create(
-				context.Background(), gs, metav1.CreateOptions{},
-			)
-			require.NoError(t, err)
-			// Clear the Create action so only actions from reconcileRestart are counted.
-			fakeClient.ClearActions()
+			// runReconcile clears the Create action for us.
+			_ = runReconcile(t, c, fakeClient, factory, gs)
 
-			// Call reconcileRestart directly — the terminal-state guard inside
-			// reconcileRestart must return nil before doing any Update.
-			require.NoError(t, c.reconcileRestart(context.Background(), gs))
-
-			// No Update calls should have been made.
 			for _, a := range fakeClient.Actions() {
 				assert.NotEqual(t, "update", a.GetVerb(),
 					"must not update a terminal-state GS (%s)", state)
@@ -412,8 +350,7 @@ func TestNoRestartWithNoPolicy(t *testing.T) {
 	require.NoError(t, c.syncGameServer(context.Background(), testNamespace+"/"+testGSName))
 
 	for _, a := range fakeClient.Actions() {
-		assert.NotEqual(t, "update", a.GetVerb(),
-			"must not touch a GS with no RestartPolicy")
+		assert.NotEqual(t, "update", a.GetVerb(), "must not touch a GS with no RestartPolicy")
 	}
 }
 
@@ -426,15 +363,7 @@ func TestRestartDeferredWhenPlayersConnected(t *testing.T) {
 	gs.Status.State = agonesv1.GameServerStateReady
 	gs.Status.Players = &agonesv1.PlayerStatus{Count: 5, Capacity: 10}
 
-	seedLister(t, factory, gs)
-	_, err := fakeClient.AgonesV1().GameServers(testNamespace).Create(
-		context.Background(), gs, metav1.CreateOptions{},
-	)
-	require.NoError(t, err)
-
-	require.NoError(t, c.reconcileRestart(context.Background(), gs))
-
-	updated := lastUpdateGS(t, fakeClient)
+	updated := runReconcile(t, c, fakeClient, factory, gs)
 	require.NotNil(t, updated)
 	_, ok := updated.Annotations[agonesv1.GameServerRestartPendingSinceAnnotation]
 	assert.True(t, ok, "restart-pending-since must be set when active players block restart")
