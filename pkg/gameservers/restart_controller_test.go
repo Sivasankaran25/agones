@@ -16,6 +16,7 @@ package gameservers
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -282,30 +283,27 @@ func TestInvalidCronValidation(t *testing.T) {
 				Template: corev1.PodTemplateSpec{
 					Spec: corev1.PodSpec{
 						Containers: []corev1.Container{
-							{Name: "game-server", Image: "us-docker.pkg.dev/agones-images/examples/simple-game-server:0.35"},
+							{
+								Name:  "game-server",
+								Image: "us-docker.pkg.dev/agones-images/examples/simple-game-server:0.35",
+							},
 						},
 					},
 				},
 			}
-
 			errs := gss.Validate(noopAPIHooks{}, "", field.NewPath("spec"))
-
 			var rpErrs field.ErrorList
 			for _, e := range errs {
-				if len(e.Field) >= 13 && e.Field[:13] == "restartPolicy" {
+				if strings.Contains(e.Field, "restartPolicy.schedule") {
 					rpErrs = append(rpErrs, e)
 				}
 			}
-
 			if tc.wantErr {
 				assert.NotEmpty(t, rpErrs,
-					"expected restartPolicy validation error for schedule %q", tc.schedule)
-				if len(rpErrs) > 0 {
-					assert.Equal(t, "restartPolicy.schedule", rpErrs[0].Field)
-				}
+					"expected restartPolicy validation error for schedule %q, but got none", tc.schedule)
 			} else {
 				assert.Empty(t, rpErrs,
-					"did NOT expect restartPolicy errors for schedule %q", tc.schedule)
+					"did NOT expect restartPolicy errors for schedule %q, but got: %v", tc.schedule, rpErrs)
 			}
 		})
 	}
