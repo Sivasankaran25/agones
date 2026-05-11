@@ -39,34 +39,6 @@ steps:
     id: e2e-feature-gates
     waitFor:
       - build-e2e
-
-  #
-  # Run the Windows GameServer smoke test
-  #
-  - id: e2e-windows-smoke
-    name: "us-docker.pkg.dev/agones-images/ci/e2e-runner:latest"
-    entrypoint: bash
-    args:
-      - "-c"
-      - |
-        go test ./test/e2e/... \
-          -run TestWindowsCreateConnect \
-          -tags e2e \
-          -v \
-          -timeout 15m \
-          -args \
-          -kubeconfig=/workspace/kubeconfig \
-          -gameServerImage=$(REGISTRY)/examples/simple-game-server:$(VERSION)-windows_amd64-ltsc2022 \
-          2>&1 | tee /workspace/e2e-windows.log
-
-        grep -q "FAIL" /workspace/e2e-windows.log && exit 1 || true
-    env:
-      - "REGISTRY=${_REGISTRY}"
-      - "VERSION=${_VERSION}"
-    waitFor:
-      - setup-e2e-cluster
-      - push-windows-images
-    timeout: 900s
   #
   # Run the e2e tests without FeatureGates
   #
@@ -80,6 +52,25 @@ steps:
       - ${_GS_TEST_IMAGE}
     id: e2e-stable
     waitFor: [e2e-feature-gates]
+  #
+  # Run Windows GameServer smoke test
+  # Runs parallel with e2e-feature-gates so it does not add to wall-clock time.
+  #
+  - name: e2e-runner
+    args:
+      - ${_FEATURE_WITHOUT_GATE}
+      - ${_CLOUD_PRODUCT}
+      - ${_TEST_CLUSTER_NAME}
+      - ${_TEST_CLUSTER_LOCATION}
+      - ${_REGISTRY}
+      - ${_GS_TEST_IMAGE}
+    env:
+      - 'WINDOWS_GS_IMAGE=${_GS_TEST_IMAGE}-windows_amd64-ltsc2019'
+      - 'E2E_TEST_RUN=TestWindowsCreateConnect'
+    id: e2e-windows-smoke
+    waitFor:
+      - build-e2e
+    timeout: 900s
 tags:
   - e2e-test
   - cluster-${_TEST_CLUSTER_NAME}
