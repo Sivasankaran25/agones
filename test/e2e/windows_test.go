@@ -30,8 +30,8 @@ import (
 )
 
 // windowsGameServerImage is the windows/amd64 build of simple-game-server.
-// Built from examples/simple-game-server/Dockerfile.windows with ltsc2022 base.
-const windowsGameServerImage = "us-docker.pkg.dev/agones-images/examples/simple-game-server:0.42-windows_amd64-ltsc2022"
+// Built from examples/simple-game-server/Dockerfile.windows with ltsc2019 base.
+const windowsGameServerImage = "us-docker.pkg.dev/agones-images/examples/simple-game-server:0.42-windows_amd64-ltsc2019"
 
 // windowsGameServerFixture returns a GameServer spec targeting the Windows node pool.
 //

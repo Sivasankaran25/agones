@@ -24,7 +24,6 @@ steps:
     dir: build/e2e-image
     id: build-e2e
     waitFor: ['-']
-
   #
   # Run the e2e tests with FeatureGates inverted compared to Stable
   #
@@ -54,7 +53,7 @@ steps:
     waitFor: [e2e-feature-gates]
   #
   # Run Windows GameServer smoke test
-  # Runs parallel with e2e-feature-gates so it does not add to wall-clock time.
+  # Runs parallel with e2e-feature-gates, does not add to wall-clock time.
   #
   - name: e2e-runner
     args:
