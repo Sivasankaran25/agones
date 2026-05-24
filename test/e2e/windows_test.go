@@ -12,9 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build e2e
-// +build e2e
-
 package e2e
 
 import (
@@ -29,21 +26,21 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// windowsGameServerImage is the windows/amd64 build of simple-game-server.
-// Built from examples/simple-game-server/Dockerfile.windows with ltsc2019 base.
+// windowsGameServerImage is the published windows/amd64 simple-game-server.
+// Uses ltsc2019 — the currently available tag in agones-images registry.
 const windowsGameServerImage = "us-docker.pkg.dev/agones-images/examples/simple-game-server:0.42-windows_amd64-ltsc2019"
 
-// windowsGameServerFixture returns a GameServer spec targeting the Windows node pool.
+// windowsGameServerFixture returns a GameServer spec targeting Windows nodes.
 //
 // Both nodeSelector AND toleration are required on GKE:
-//   - nodeSelector: schedules only to Windows nodes
-//   - toleration: GKE auto-applies node.kubernetes.io/os=windows:NoSchedule to
-//     all Windows nodes; without this toleration the pod stays Pending forever.
+//   - nodeSelector: restricts scheduling to Windows nodes only.
+//   - toleration: GKE auto-applies node.kubernetes.io/os=windows:NoSchedule
+//     to all Windows nodes. Without this the pod stays Pending forever.
 func windowsGameServerFixture() *agonesv1.GameServer {
 	return &agonesv1.GameServer{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: "simple-game-server-windows-",
-			Namespace:    framework.Namespace, // package-level var from main_test.go
+			Namespace:    framework.Namespace,
 		},
 		Spec: agonesv1.GameServerSpec{
 			Ports: []agonesv1.GameServerPort{
@@ -92,24 +89,28 @@ func windowsGameServerFixture() *agonesv1.GameServer {
 // TestWindowsCreateConnect is the Beta smoke test for Windows GameServer support.
 // Validates:
 //  1. GameServer with Windows image + nodeSelector + toleration reaches Ready.
-//  2. Pod is scheduled on a Windows node (not Linux).
+//  2. Pod scheduled on a Windows node (not Linux).
 //  3. sdk-server sidecar (windows/amd64) initialises and signals Ready.
-//  4. UDP connectivity to the host port works from outside the cluster.
+//  4. UDP connectivity works from outside the cluster.
 func TestWindowsCreateConnect(t *testing.T) {
 	t.Parallel()
 
 	gs := windowsGameServerFixture()
 
-	// framework.WaitForState is the cluster-default timeout (set in main_test.go).
-	// Windows image pulls on a cold node can take 3-8 min, so we use 10 minutes.
-	// The framework variable is the *framework.Framework from main_test.go — no import needed.
+	// framework is the package-level *framework.Framework from main_test.go.
+	// CreateGameServerAndWaitUntilReady polls until Ready or default timeout.
+	// Windows image pulls on a cold node can take 3-8 min.
 	readyGs, err := framework.CreateGameServerAndWaitUntilReady(t, framework.Namespace, gs)
-	require.NoError(t, err, "GameServer must reach Ready state — check Windows node pool exists and image is pushed")
+	require.NoError(t, err,
+		"GameServer must reach Ready — verify Windows node pool exists and image is pushed")
 
-	defer framework.AgonesClient.AgonesV1().
-		GameServers(readyGs.Namespace).
-		Delete(context.Background(), readyGs.Name, metav1.DeleteOptions{}) // nolint:errcheck
-
+	defer func() {
+		if err := framework.AgonesClient.AgonesV1().
+			GameServers(readyGs.Namespace).
+			Delete(context.Background(), readyGs.Name, metav1.DeleteOptions{}); err != nil {
+			t.Logf("Failed to delete GameServer %s: %v", readyGs.Name, err)
+		}
+	}()
 	t.Logf("GameServer %s is Ready: address=%s port=%d",
 		readyGs.Name, readyGs.Status.Address, readyGs.Status.Ports[0].Port)
 
@@ -127,20 +128,18 @@ func TestWindowsCreateConnect(t *testing.T) {
 	nodeOS := node.Labels["kubernetes.io/os"]
 	assert.Equal(t, "windows", nodeOS,
 		"Pod must run on a Windows node, got os=%s on node %s", nodeOS, pod.Spec.NodeName)
-	t.Logf("Pod %s is running on node %s (os=%s)", pod.Name, pod.Spec.NodeName, nodeOS)
+	t.Logf("Pod %s running on node %s (os=%s)", pod.Name, pod.Spec.NodeName, nodeOS)
 
 	// Assert address and port are populated.
-	require.NotEmpty(t, readyGs.Status.Address, "GameServer must have an external address")
-	require.NotEmpty(t, readyGs.Status.Ports, "GameServer must have at least one port")
+	require.NotEmpty(t, readyGs.Status.Address)
+	require.NotEmpty(t, readyGs.Status.Ports)
 
-	// Send a UDP message using the framework helper.
-	// SendGameServerUDP retries 5 times and times out after 10 seconds.
-	// simple-game-server echoes back "ACK: <message>".
+	// Send UDP and verify echo. simple-game-server replies "ACK: <message>".
 	reply, err := framework.SendGameServerUDP(t, readyGs, "PING")
-	require.NoError(t, err, "UDP send/receive must succeed against Windows GameServer at %s:%d",
+	require.NoError(t, err, "UDP send/receive must succeed at %s:%d",
 		readyGs.Status.Address, readyGs.Status.Ports[0].Port)
 
 	assert.Contains(t, reply, "ACK",
-		"simple-game-server must echo back ACK, got: %q", reply)
-	t.Logf("UDP response from Windows GameServer: %q", reply)
+		"simple-game-server must echo ACK, got: %q", reply)
+	t.Logf("UDP response: %q", reply)
 }
