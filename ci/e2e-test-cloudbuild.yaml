@@ -59,13 +59,13 @@ steps:
   - name: e2e-runner
     entrypoint: bash
     args:
-    - -c
-    - |
-      if [[ "${_CLOUD_PRODUCT}" == "gke-autopilot" ]]; then
+      - -c
+      - |
+        if [[ "${_CLOUD_PRODUCT}" == "gke-autopilot" ]]; then
         echo "Skipping Windows smoke test: GKE Autopilot does not support Windows nodes."
         exit 0
-      fi
-      /e2e.sh \
+        fi
+        /e2e.sh \
         ${_FEATURE_WITHOUT_GATE} \
         generic \
         ${_TEST_CLUSTER_NAME} \
@@ -75,7 +75,7 @@ steps:
         --run TestWindowsCreateConnect
     id: e2e-windows-smoke
     waitFor:
-    - build-e2e
+      - build-e2e
     timeout: 900s
 tags:
   - e2e-test
