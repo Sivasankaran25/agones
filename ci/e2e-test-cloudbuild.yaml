@@ -52,23 +52,30 @@ steps:
     id: e2e-stable
     waitFor: [e2e-feature-gates]
   #
-  # Run Windows GameServer smoke test
-  # Runs parallel with e2e-feature-gates, does not add to wall-clock time.
+  # Run Windows GameServer smoke test.
+  # Windows nodes are NOT supported on GKE Autopilot — skip when
+  # _CLOUD_PRODUCT=gke-autopilot. Only runs on Standard clusters (generic).
   #
   - name: e2e-runner
+    entrypoint: bash
     args:
-      - ${_FEATURE_WITHOUT_GATE}
-      - ${_CLOUD_PRODUCT}
-      - ${_TEST_CLUSTER_NAME}
-      - ${_TEST_CLUSTER_LOCATION}
-      - ${_REGISTRY}
-      - ${_GS_TEST_IMAGE}
-    env:
-      - 'WINDOWS_GS_IMAGE=${_GS_TEST_IMAGE}-windows_amd64-ltsc2019'
-      - 'E2E_TEST_RUN=TestWindowsCreateConnect'
+    - -c
+    - |
+      if [[ "${_CLOUD_PRODUCT}" == "gke-autopilot" ]]; then
+        echo "Skipping Windows smoke test: GKE Autopilot does not support Windows nodes."
+        exit 0
+      fi
+      /e2e.sh \
+        ${_FEATURE_WITHOUT_GATE} \
+        generic \
+        ${_TEST_CLUSTER_NAME} \
+        ${_TEST_CLUSTER_LOCATION} \
+        ${_REGISTRY} \
+        ${_GS_TEST_IMAGE} \
+        --run TestWindowsCreateConnect
     id: e2e-windows-smoke
     waitFor:
-      - build-e2e
+    - build-e2e
     timeout: 900s
 tags:
   - e2e-test
