@@ -121,11 +121,6 @@ spec:
         # maximum port that can be exposed to GameServer traffic
         - name: MAX_PORT
           value: {{ .Values.gameservers.maxPort | quote }}
-        {{- if .Values.gameservers.additionalPortRanges }}
-        {{- $featureGates := include "agones.featureGates" . | fromYaml }}
-        {{- if not $featureGates.PortRanges }}
-        {{- fail "gameservers.additionalPortRanges specified without feature gate PortRanges enabled!" }}
-        {{- end }}
         - name: ADDITIONAL_PORT_RANGES
           value: {{ .Values.gameservers.additionalPortRanges | toJson | quote }}
         {{- end }}

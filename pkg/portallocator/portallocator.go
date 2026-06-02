@@ -231,7 +231,7 @@ func (pa *portRangeAllocator) Allocate(gs *agonesv1.GameServer) *agonesv1.GameSe
 				if p.PortPolicy != agonesv1.Dynamic && p.PortPolicy != agonesv1.Passthrough {
 					continue
 				}
-				if runtime.FeatureEnabled(runtime.FeaturePortRanges) && p.Range != pa.name {
+				if p.Range != pa.name {
 					continue
 				}
 				// pop off allocation

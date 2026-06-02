@@ -54,6 +54,8 @@ The current set of `alpha`, `beta` and `stable` feature gates include:
 |------------------------------------------------------------------------------------------|----------------------------|---------|----------|--------|
 | [DisableResyncOnSDKServer](https://github.com/agones-dev/agones/issues/3377)             | `DisableResyncOnSDKServer` | Enabled | `Stable` | 1.49.0 |
 | [Support Passthrough on GKE Autopilot](https://github.com/agones-dev/agones/issues/3721) | `AutopilotPassthroughPort` | Enabled | `Stable` | 1.54.0 |
+| [Multiple dynamic port ranges](https://github.com/agones-dev/agones/issues/1911)                                       | `PortRanges`                       | Enabled | `Stable` | 1.59.0 |
+| 
 
 [fleet-updates]: {{% relref "./fleet-updates.md#notifying-gameservers-on-fleet-updatedownscale" %}}
 
