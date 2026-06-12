@@ -211,15 +211,9 @@ func (pa *portRangeAllocator) Allocate(gs *agonesv1.GameServer) *agonesv1.GameSe
 	var allocate func(gs *agonesv1.GameServer) *agonesv1.GameServer
 	allocate = func(gs *agonesv1.GameServer) *agonesv1.GameServer {
 		var amount int
-		if runtime.FeatureEnabled(runtime.FeaturePortRanges) {
-			amount = gs.CountPortsForRange(pa.name, func(policy agonesv1.PortPolicy) bool {
-				return policy == agonesv1.Dynamic || policy == agonesv1.Passthrough
-			})
-		} else {
-			amount = gs.CountPorts(func(policy agonesv1.PortPolicy) bool {
-				return policy == agonesv1.Dynamic || policy == agonesv1.Passthrough
-			})
-		}
+		amount = gs.CountPortsForRange(pa.name, func(policy agonesv1.PortPolicy) bool {
+			return policy == agonesv1.Dynamic || policy == agonesv1.Passthrough
+		})
 		allocations := findOpenPorts(amount)
 
 		if len(allocations) == amount {
