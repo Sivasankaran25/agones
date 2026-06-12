@@ -210,8 +210,7 @@ func (pa *portRangeAllocator) Allocate(gs *agonesv1.GameServer) *agonesv1.GameSe
 	// this allows us to do recursion, within the mutex lock
 	var allocate func(gs *agonesv1.GameServer) *agonesv1.GameServer
 	allocate = func(gs *agonesv1.GameServer) *agonesv1.GameServer {
-		var amount int
-		amount = gs.CountPortsForRange(pa.name, func(policy agonesv1.PortPolicy) bool {
+		amount := gs.CountPortsForRange(pa.name, func(policy agonesv1.PortPolicy) bool {
 			return policy == agonesv1.Dynamic || policy == agonesv1.Passthrough
 		})
 		allocations := findOpenPorts(amount)
