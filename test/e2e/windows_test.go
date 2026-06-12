@@ -94,7 +94,7 @@ func windowsGameServerFixture() *agonesv1.GameServer {
 //  4. UDP connectivity works from outside the cluster.
 func TestWindowsCreateConnect(t *testing.T) {
 	t.Parallel()
-
+	framework.SkipOnCloudProduct(t, "gke-autopilot", "does not support Windows nodes")
 	gs := windowsGameServerFixture()
 
 	// framework is the package-level *framework.Framework from main_test.go.
