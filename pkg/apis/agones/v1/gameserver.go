@@ -281,6 +281,8 @@ type Health struct {
 type GameServerPort struct {
 	// Name is the descriptive name of the port
 	Name string `json:"name,omitempty"`
+	//Range is the port range name from which to select a port when using a
+	// 'Dynamic' or 'Passthrough' port policy.
 	// +optional
 	Range string `json:"range,omitempty"`
 	// PortPolicy defines the policy for how the HostPort is populated.
