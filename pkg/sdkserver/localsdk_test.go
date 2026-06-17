@@ -612,9 +612,6 @@ func TestLocalSDKServerPlayerConnectAndDisconnect(t *testing.T) {
 func TestLocalSDKServerGetCounter(t *testing.T) {
 	t.Parallel()
 
-	runtime.FeatureTestMutex.Lock()
-	defer runtime.FeatureTestMutex.Unlock()
-
 	counters := map[string]agonesv1.CounterStatus{
 		"sessions": {Count: int64(1), Capacity: int64(100)},
 	}
@@ -1103,9 +1100,6 @@ func TestLocalSDKServerUpdateList(t *testing.T) {
 
 func TestLocalSDKServerAddListValue(t *testing.T) {
 	t.Parallel()
-
-	runtime.FeatureTestMutex.Lock()
-	defer runtime.FeatureTestMutex.Unlock()
 
 	lists := map[string]agonesv1.ListStatus{
 		"lemmings": {Capacity: int64(100), Values: []string{"lemming1", "lemming2"}},

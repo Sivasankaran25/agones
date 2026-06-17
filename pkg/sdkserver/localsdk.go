@@ -605,8 +605,6 @@ func (l *LocalSDKServer) GetPlayerCapacity(_ context.Context, _ *alpha.Empty) (*
 }
 
 // GetCounter returns a Counter. Returns not found if the counter does not exist.
-// [Stage:Beta]
-// [FeatureFlag:CountsAndLists]
 func (l *LocalSDKServer) GetCounter(_ context.Context, in *beta.GetCounterRequest) (*beta.Counter, error) {
 	if in == nil {
 		return nil, errors.Errorf("invalid argument. GetCounterRequest cannot be nil")
