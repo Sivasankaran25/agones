@@ -8123,23 +8123,6 @@ label/annotation/player selectors to retrieve an already Allocated GameServer.</
 </tr>
 <tr>
 <td>
-<code>players</code><br/>
-<em>
-<a href="#allocation.agones.dev/v1.PlayerSelector">
-PlayerSelector
-</a>
-</em>
-</td>
-<td>
-<em>(Optional)</em>
-<p>[Stage:Alpha]
-[FeatureFlag:PlayerAllocationFilter]
-Players provides a filter on minimum and maximum values for player capacity when retrieving a GameServer
-through Allocation. Defaults to no limits.</p>
-</td>
-</tr>
-<tr>
-<td>
 <code>counters</code><br/>
 <em>
 <a href="#allocation.agones.dev/v1.CounterSelector">
@@ -8360,45 +8343,6 @@ bool
 <a href="https://v1-34.docs.kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#labelselector-v1-meta">
 Kubernetes meta/v1.LabelSelector
 </a>
-</em>
-</td>
-<td>
-</td>
-</tr>
-</tbody>
-</table>
-<h3 id="allocation.agones.dev/v1.PlayerSelector">PlayerSelector
-</h3>
-<p>
-(<em>Appears on:</em>
-<a href="#allocation.agones.dev/v1.GameServerSelector">GameServerSelector</a>)
-</p>
-<p>
-<p>PlayerSelector is the filter options for a GameServer based on player counts</p>
-</p>
-<table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>
-<code>minAvailable</code><br/>
-<em>
-int64
-</em>
-</td>
-<td>
-</td>
-</tr>
-<tr>
-<td>
-<code>maxAvailable</code><br/>
-<em>
-int64
 </em>
 </td>
 <td>
