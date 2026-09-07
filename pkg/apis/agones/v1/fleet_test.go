@@ -58,7 +58,7 @@ func TestFleetGameServerSetGameServer(t *testing.T) {
 	}
 
 	gsSet := f.GameServerSet()
-	assert.Equal(t, "", gsSet.ObjectMeta.Name)
+	assert.Empty(t, gsSet.ObjectMeta.Name)
 	assert.Equal(t, f.ObjectMeta.Namespace, gsSet.ObjectMeta.Namespace)
 	assert.Equal(t, f.ObjectMeta.Name+"-", gsSet.ObjectMeta.GenerateName)
 	assert.Equal(t, f.ObjectMeta.Name, gsSet.ObjectMeta.Labels[FleetNameLabel])
@@ -84,21 +84,21 @@ func TestFleetGameServerSetGameServer(t *testing.T) {
 			Key:   "Foo",
 			Order: "Ascending"}}
 	assert.NotNil(t, f.Spec.Priorities)
-	assert.Equal(t, f.Spec.Priorities[0], Priority{Type: "Counter", Key: "Foo", Order: "Ascending"})
+	assert.Equal(t, Priority{Type: "Counter", Key: "Foo", Order: "Ascending"}, f.Spec.Priorities[0])
 
 	gsSet = f.GameServerSet()
 	assert.NotNil(t, gsSet.Spec.AllocationOverflow)
 	assert.Equal(t, "things", gsSet.Spec.AllocationOverflow.Labels["stuff"])
 
-	assert.Equal(t, gsSet.Spec.Priorities[0], Priority{Type: "Counter", Key: "Foo", Order: "Ascending"})
+	assert.Equal(t, Priority{Type: "Counter", Key: "Foo", Order: "Ascending"}, gsSet.Spec.Priorities[0])
 }
 
 func TestFleetApplyDefaults(t *testing.T) {
 	f := &Fleet{}
 
 	// gate
-	assert.EqualValues(t, "", f.Spec.Strategy.Type)
-	assert.EqualValues(t, "", f.Spec.Scheduling)
+	assert.Empty(t, f.Spec.Strategy.Type)
+	assert.Empty(t, f.Spec.Scheduling)
 	assert.EqualValues(t, 0, f.Spec.Replicas)
 
 	f.ApplyDefaults()
@@ -152,7 +152,7 @@ func TestFleetGameserverSpec(t *testing.T) {
 	f := defaultFleet()
 	f.ApplyDefaults()
 	errs := f.Validate(fakeAPIHooks{})
-	assert.Len(t, errs, 0)
+	assert.Empty(t, errs)
 
 	f.Spec.Template.Spec.Template =
 		corev1.PodTemplateSpec{
@@ -172,7 +172,7 @@ func TestFleetGameserverSpec(t *testing.T) {
 
 	f.Spec.Template.Spec.Container = "container"
 	errs = f.Validate(fakeAPIHooks{})
-	assert.Len(t, errs, 0)
+	assert.Empty(t, errs)
 
 	// Verify RollingUpdate parameters validation
 	percent := intstr.FromString("0%")
@@ -257,7 +257,7 @@ func TestFleetName(t *testing.T) {
 	f.Name = ""
 	f.GenerateName = longName
 	errs = f.Validate(fakeAPIHooks{})
-	assert.Len(t, errs, 0)
+	assert.Empty(t, errs)
 }
 
 func TestSumStatusReplicas(t *testing.T) {

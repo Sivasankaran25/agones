@@ -317,7 +317,7 @@ func (s *GameServerSelector) Validate(fldPath *field.Path) field.ErrorList {
 		allErrs = append(allErrs, field.Invalid(fldPath.Child("labelSelector"), s.LabelSelector, fmt.Sprintf("Error converting label selector: %s", err)))
 	}
 
-	if s.GameServerState != nil && !(*s.GameServerState == agonesv1.GameServerStateAllocated || *s.GameServerState == agonesv1.GameServerStateReady) {
+	if s.GameServerState != nil && *s.GameServerState != agonesv1.GameServerStateAllocated && *s.GameServerState != agonesv1.GameServerStateReady {
 		allErrs = append(allErrs, field.Invalid(fldPath.Child("gameServerState"), *s.GameServerState, "GameServerState must be either Allocated or Ready"))
 	}
 

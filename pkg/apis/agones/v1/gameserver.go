@@ -164,6 +164,7 @@ const (
 	NodePodIP corev1.NodeAddressType = "PodIP"
 
 	// PassthroughPortAssignmentAnnotation is an annotation to keep track of game server container and its Passthrough ports indices
+	//nolint:gosec // G101: matches on the "Pass" in "Passthrough"; this is an annotation key, not a credential.
 	PassthroughPortAssignmentAnnotation = "agones.dev/container-passthrough-port-assignment"
 
 	// True is the string "true" to appease the goconst lint.
@@ -996,7 +997,7 @@ func (gs *GameServer) Patch(delta *GameServer) ([]byte, error) {
 
 // UpdateCount increments or decrements a CounterStatus on a Game Server by the given amount.
 func (gs *GameServer) UpdateCount(name string, action string, amount int64) error {
-	if !(action == GameServerPriorityIncrement || action == GameServerPriorityDecrement) {
+	if action != GameServerPriorityIncrement && action != GameServerPriorityDecrement {
 		return errors.Errorf("unable to UpdateCount with Name %s, Action %s, Amount %d. Allocation action must be one of %s or %s", name, action, amount, GameServerPriorityIncrement, GameServerPriorityDecrement)
 	}
 	if amount < 0 {

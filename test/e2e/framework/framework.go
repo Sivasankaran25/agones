@@ -31,10 +31,12 @@ import (
 	"testing"
 	"time"
 
+	"agones.dev/agones/pkg/cloudproduct"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -61,6 +63,13 @@ import (
 const (
 	AutoCleanupLabelKey   = "agones.dev/e2e-test-auto-cleanup"
 	AutoCleanupLabelValue = "true"
+	// appLabelKey is the label key identifying which application a resource belongs to.
+	appLabelKey = "app"
+	// agonesAppLabelValue is the appLabelKey value put on Agones system resources.
+	agonesAppLabelValue = "agones"
+	// gameServerContainerName names the GameServer container. GameServerSpec.Container
+	// must match the pod container name, so both are derived from this constant.
+	gameServerContainerName = "game-server"
 )
 
 // NamespaceLabel is the label that is put on all namespaces that are created
@@ -196,7 +205,7 @@ func NewFromFlags() (*Framework, error) {
 	framework.Namespace = viper.GetString(namespaceFlag)
 	framework.CloudProduct = viper.GetString(cloudProductFlag)
 	framework.WaitForState = 5 * time.Minute
-	if framework.CloudProduct == "gke-autopilot" {
+	if framework.CloudProduct == cloudproduct.GkeAutopilotProduct {
 		// Autopilot can take a little while due to autoscaling, be a little liberal.
 		// Keeping it under 10m so we don't get stack track dumps at 10m as unit tests can't be extended past 10m.
 		framework.WaitForState = 8 * time.Minute
@@ -221,7 +230,7 @@ func (f *Framework) CreateGameServerAndWaitUntilReady(t *testing.T, ns string, g
 	log := TestLogger(t)
 	newGs, err := f.AgonesClient.AgonesV1().GameServers(ns).Create(context.Background(), gs, metav1.CreateOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("creating %v GameServer instances failed (%v): %v", gs.Spec, gs.Name, err)
+		return nil, fmt.Errorf("creating %v GameServer instances failed (%v): %w", gs.Spec, gs.Name, err)
 	}
 
 	log.WithField("gs", newGs.ObjectMeta.Name).Info("GameServer created, waiting for Ready")
@@ -229,7 +238,7 @@ func (f *Framework) CreateGameServerAndWaitUntilReady(t *testing.T, ns string, g
 	readyGs, err := f.WaitForGameServerState(t, newGs, agonesv1.GameServerStateReady, f.WaitForState)
 
 	if err != nil {
-		return readyGs, fmt.Errorf("waiting for %v GameServer instance readiness timed out (%v): %v",
+		return readyGs, fmt.Errorf("waiting for %v GameServer instance readiness timed out (%v): %w",
 			gs.Spec, gs.Name, err)
 	}
 
@@ -308,7 +317,7 @@ func (f *Framework) CycleAllocations(ctx context.Context, t *testing.T, flt *ago
 		go func(gsa *allocationv1.GameServerAllocation) {
 			time.Sleep(allocDuration)
 			err := f.AgonesClient.AgonesV1().GameServers(gsa.Namespace).Delete(context.Background(), gsa.Status.GameServerName, metav1.DeleteOptions{})
-			require.NoError(t, err)
+			assert.NoError(t, err)
 		}(gsa)
 
 		return false, nil
@@ -610,7 +619,7 @@ func (f *Framework) SendUDP(t *testing.T, address, msg string) (string, error) {
 // SendGameServerTCP sends a message to a gameserver and returns its reply
 // finds the first tcp port from the spec to send the message to,
 // returns error if no Ports were allocated
-func SendGameServerTCP(gs *agonesv1.GameServer, msg string) (string, error) {
+func (f *Framework) SendGameServerTCP(gs *agonesv1.GameServer, msg string) (string, error) {
 	if len(gs.Status.Ports) == 0 {
 		return "", errors.New("Empty Ports array")
 	}
@@ -618,7 +627,7 @@ func SendGameServerTCP(gs *agonesv1.GameServer, msg string) (string, error) {
 	// use first tcp port
 	for _, p := range gs.Spec.Ports {
 		if p.Protocol == corev1.ProtocolTCP {
-			return SendGameServerTCPToPort(gs, p.Name, msg)
+			return f.SendGameServerTCPToPort(gs, p.Name, msg)
 		}
 	}
 	return "", errors.New("No TCP ports")
@@ -626,29 +635,57 @@ func SendGameServerTCP(gs *agonesv1.GameServer, msg string) (string, error) {
 
 // SendGameServerTCPToPort sends a message to a gameserver at the named port and returns its reply
 // returns error if no Ports were allocated or a port of the specified name doesn't exist
-func SendGameServerTCPToPort(gs *agonesv1.GameServer, portName string, msg string) (string, error) {
+func (f *Framework) SendGameServerTCPToPort(gs *agonesv1.GameServer, portName string, msg string) (string, error) {
 	if len(gs.Status.Ports) == 0 {
 		return "", errors.New("Empty Ports array")
 	}
 	var port agonesv1.GameServerStatusPort
+	var found bool
 	for _, p := range gs.Status.Ports {
 		if p.Name == portName {
 			port = p
+			found = true
+			break
 		}
 	}
+	if !found {
+		return "", errors.Errorf("port %q not found in GameServer status", portName)
+	}
 	address := fmt.Sprintf("%s:%d", gs.Status.Address, port.Port)
-	return SendTCP(address, msg)
+	return f.SendTCP(address, msg)
 }
 
-// SendTCP sends a message to an address, and returns its reply if
-// it returns one in 30 seconds
-func SendTCP(address, msg string) (string, error) {
-	conn, err := net.Dial("tcp", address)
-	if err != nil {
-		return "", err
+// SendTCP connects to an address and sends it a message, returning the
+// reply. On GKE Autopilot, the initial dial is retried for up to 5 minutes,
+// since the network path (e.g. hostPort NAT/eBPF rules) can take a while to
+// become reachable right after a GameServer transitions to Ready; other
+// cloud products dial once, as they are not known to have this delay. Once
+// connected, the reply must arrive within 30 seconds or this returns an
+// error.
+func (f *Framework) SendTCP(address, msg string) (string, error) {
+	var conn net.Conn
+	if f.CloudProduct == cloudproduct.GkeAutopilotProduct {
+		err := wait.PollUntilContextTimeout(context.Background(), time.Second, 5*time.Minute, true, func(_ context.Context) (bool, error) {
+			var dialErr error
+			conn, dialErr = net.DialTimeout("tcp", address, 10*time.Second)
+			if dialErr != nil {
+				logrus.WithError(dialErr).WithField("address", address).Info("could not dial TCP address, retrying")
+				return false, nil
+			}
+			return true, nil
+		})
+		if err != nil {
+			return "", errors.Wrap(err, "timed out attempting to dial TCP address")
+		}
+	} else {
+		var err error
+		conn, err = net.DialTimeout("tcp", address, 10*time.Second)
+		if err != nil {
+			return "", err
+		}
 	}
 
-	if err := conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
+	if err := conn.SetDeadline(time.Now().Add(30 * time.Second)); err != nil {
 		return "", err
 	}
 
@@ -659,7 +696,7 @@ func SendTCP(address, msg string) (string, error) {
 	}()
 
 	// writes to the tcp connection
-	_, err = fmt.Fprintln(conn, msg)
+	_, err := fmt.Fprintln(conn, msg)
 	if err != nil {
 		return "", err
 	}
@@ -708,7 +745,7 @@ func (f *Framework) CreateNamespace(namespace string) error {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      saName,
 			Namespace: namespace,
-			Labels:    map[string]string{"app": "agones"},
+			Labels:    map[string]string{appLabelKey: agonesAppLabelValue},
 		},
 	}, options); err != nil {
 		err = errors.Errorf("creating ServiceAccount %s in namespace %s failed: %s", saName, namespace, err.Error())
@@ -721,7 +758,7 @@ func (f *Framework) CreateNamespace(namespace string) error {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      roleName,
 			Namespace: namespace,
-			Labels:    map[string]string{"app": "agones"},
+			Labels:    map[string]string{appLabelKey: agonesAppLabelValue},
 		},
 		Rules: []rbacv1.PolicyRule{
 			{
@@ -742,7 +779,7 @@ func (f *Framework) CreateNamespace(namespace string) error {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "agones-sdk-access",
 			Namespace: namespace,
-			Labels:    map[string]string{"app": "agones"},
+			Labels:    map[string]string{appLabelKey: agonesAppLabelValue},
 		},
 		RoleRef: rbacv1.RoleRef{
 			APIGroup: "rbac.authorization.k8s.io",
@@ -768,7 +805,7 @@ func (f *Framework) CreateNamespace(namespace string) error {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "agones-sdk-cluster-access",
 			Namespace: namespace,
-			Labels:    map[string]string{"app": "agones"},
+			Labels:    map[string]string{appLabelKey: agonesAppLabelValue},
 		},
 		RoleRef: rbacv1.RoleRef{
 			APIGroup: "rbac.authorization.k8s.io",
@@ -830,9 +867,9 @@ type patchRemoveNoValue struct {
 // DefaultGameServer provides a default GameServer fixture, based on parameters
 // passed to the Test Framework.
 func (f *Framework) DefaultGameServer(namespace string) *agonesv1.GameServer {
-	gs := &agonesv1.GameServer{ObjectMeta: metav1.ObjectMeta{GenerateName: "game-server", Namespace: namespace},
+	gs := &agonesv1.GameServer{ObjectMeta: metav1.ObjectMeta{GenerateName: gameServerContainerName, Namespace: namespace},
 		Spec: agonesv1.GameServerSpec{
-			Container: "game-server",
+			Container: gameServerContainerName,
 			Ports: []agonesv1.GameServerPort{{
 				ContainerPort: 7654,
 				Name:          "udp-port",
@@ -842,7 +879,7 @@ func (f *Framework) DefaultGameServer(namespace string) *agonesv1.GameServer {
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
 					Containers: []corev1.Container{{
-						Name:            "game-server",
+						Name:            gameServerContainerName,
 						Image:           f.GameServerImage,
 						ImagePullPolicy: corev1.PullIfNotPresent,
 						Resources: corev1.ResourceRequirements{

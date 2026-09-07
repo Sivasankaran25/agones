@@ -70,7 +70,7 @@ func computeDesiredFleetSize(ctx context.Context, state *fasState, pol autoscali
 	case autoscalingv1.BufferPolicyType:
 		replicas, limited, err = applyBufferPolicy(state, pol.Buffer, f, fasLog)
 	case autoscalingv1.WebhookPolicyType:
-		replicas, limited, err = applyWebhookPolicy(state, pol.Webhook, f, fasLog)
+		replicas, limited, err = applyWebhookPolicy(ctx, state, pol.Webhook, f, fasLog)
 	case autoscalingv1.CounterPolicyType:
 		replicas, limited, err = applyCounterOrListPolicyWrapper(state, pol.Counter, nil, f, gameServerNamespacedLister, nodeCounts, fasLog)
 	case autoscalingv1.ListPolicyType:
@@ -118,7 +118,12 @@ func applyWasmPolicy(ctx context.Context, state *fasState, wp *autoscalingv1.Was
 			return 0, false, errors.New("http client not set")
 		}
 
-		res, err := state.httpClient.Get(u.String())
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+		if err != nil {
+			return 0, false, errors.Wrapf(err, "failed to build request for Wasm module at %s", u.String())
+		}
+
+		res, err := state.httpClient.Do(req)
 		if err != nil {
 			return 0, false, errors.Wrapf(err, "failed to fetch Wasm module from %s", u.String())
 		}
@@ -267,16 +272,16 @@ func createURL(scheme, name, namespace, path string, port *int32) *url.URL {
 	}
 }
 
-func setCABundle(tls *tls.Config, caBundle []byte) error {
+func setCABundle(tlsConfig *tls.Config, caBundle []byte) error {
 	rootCAs := x509.NewCertPool()
 	if ok := rootCAs.AppendCertsFromPEM(caBundle); !ok {
 		return errors.New("no certs were appended from caBundle")
 	}
-	tls.RootCAs = rootCAs
+	tlsConfig.RootCAs = rootCAs
 	return nil
 }
 
-func applyWebhookPolicy(state *fasState, w *autoscalingv1.URLConfiguration, f *agonesv1.Fleet, fasLog *FasLogger) (replicas int32, limited bool, err error) {
+func applyWebhookPolicy(ctx context.Context, state *fasState, w *autoscalingv1.URLConfiguration, f *agonesv1.Fleet, fasLog *FasLogger) (replicas int32, limited bool, err error) {
 	if w == nil {
 		return 0, false, errors.New("webhookPolicy parameter must not be nil")
 	}
@@ -313,11 +318,13 @@ func applyWebhookPolicy(state *fasState, w *autoscalingv1.URLConfiguration, f *a
 		return 0, false, err
 	}
 
-	res, err := state.httpClient.Post(
-		u.String(),
-		"application/json",
-		strings.NewReader(string(b)),
-	)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), strings.NewReader(string(b)))
+	if err != nil {
+		return 0, false, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	res, err := state.httpClient.Do(req)
 	if err != nil {
 		return 0, false, err
 	}
@@ -501,12 +508,12 @@ func applyCounterOrListPolicy(c *autoscalingv1.CounterPolicy, l *autoscalingv1.L
 	// The buffer is the desired available capacity
 	var buffer int64
 
-	switch {
+	switch bufferSize.Type {
 	// Desired replicas based on BufferSize specified as an absolute value (i.e. 5)
-	case bufferSize.Type == intstr.Int:
+	case intstr.Int:
 		buffer = int64(bufferSize.IntValue())
 	// Desired replicas based on BufferSize specified as a percent (i.e. 5%)
-	case bufferSize.Type == intstr.String:
+	case intstr.String:
 		bufferPercent, err := intstr.GetValueFromIntOrPercent(&bufferSize, 100, isCounter)
 		if err != nil {
 			return 0, false, err
@@ -592,7 +599,7 @@ func applyChainPolicy(ctx context.Context, state *fasState, c autoscalingv1.Chai
 					"Failed to apply SchedulePolicy ID=%s in ChainPolicy: %v", entry.ID, err)
 			}
 		case autoscalingv1.WebhookPolicyType:
-			replicas, limited, err = applyWebhookPolicy(state, entry.Webhook, f, fasLog)
+			replicas, limited, err = applyWebhookPolicy(ctx, state, entry.Webhook, f, fasLog)
 
 			if err != nil {
 				loggerForFleetAutoscalerKey(fasLog.fas.ObjectMeta.Name, fasLog.baseLogger).Debugf(

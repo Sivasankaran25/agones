@@ -34,6 +34,7 @@ agones:
     install: true
     cleanupOnDelete: true
     cleanupJobTTL: 60
+    includeKubernetesPatchKeys: false
   serviceaccount:
     allocator:
       name: agones-allocator
@@ -330,7 +331,7 @@ agones:
         minAvailable: 1
   image:
     registry: us-docker.pkg.dev/agones-images/release
-    tag: 1.60.0-dev
+    tag: 1.61.0-dev
     controller:
       name: agones-controller
       pullPolicy: IfNotPresent

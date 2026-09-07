@@ -24,14 +24,13 @@ import (
 	getterv1 "agones.dev/agones/pkg/client/clientset/versioned/typed/agones/v1"
 	"agones.dev/agones/pkg/client/informers/externalversions"
 	listerv1 "agones.dev/agones/pkg/client/listers/agones/v1"
+	"agones.dev/agones/pkg/util/errors"
 	"agones.dev/agones/pkg/util/logfields"
 	"agones.dev/agones/pkg/util/runtime"
 	"agones.dev/agones/pkg/util/workerqueue"
 	"github.com/heptiolabs/healthcheck"
-	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
-	k8sv1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/informers"
@@ -58,6 +57,7 @@ type MigrationController struct {
 	workerqueue              *workerqueue.WorkerQueue
 	recorder                 record.EventRecorder
 	syncPodPortsToGameServer func(*agonesv1.GameServer, *corev1.Pod) error
+	errs                     *errors.Errors
 }
 
 // NewMigrationController returns a MigrationController
@@ -83,6 +83,7 @@ func NewMigrationController(health healthcheck.Handler,
 	}
 
 	mc.baseLogger = runtime.NewLoggerWithType(mc)
+	mc.errs = errors.FromStruct(mc)
 	mc.workerqueue = workerqueue.NewWorkerQueue(mc.syncGameServer, mc.baseLogger, logfields.GameServerKey, agones.GroupName+".MigrationController")
 	health.AddLivenessCheck("gameserver-migration-workerqueue", healthcheck.Check(mc.workerqueue.Healthy))
 
@@ -113,7 +114,7 @@ func NewMigrationController(health healthcheck.Handler,
 func (mc *MigrationController) Run(ctx context.Context, workers int) error {
 	mc.baseLogger.Debug("Wait for cache sync")
 	if !cache.WaitForCacheSync(ctx.Done(), mc.nodeSynced, mc.gameServerSynced, mc.podSynced) {
-		return errors.New("failed to wait for caches to sync")
+		return mc.errs.New("failed to wait for caches to sync")
 	}
 
 	mc.workerqueue.Run(ctx, workers)
@@ -132,7 +133,7 @@ func (mc *MigrationController) loggerForGameServer(gs *agonesv1.GameServer) *log
 	return mc.loggerForGameServerKey(gsName).WithField("gs", gs)
 }
 
-func (mc *MigrationController) isMigratingGameServerPod(pod *k8sv1.Pod) (*agonesv1.GameServer, *k8sv1.Node, bool, error) {
+func (mc *MigrationController) isMigratingGameServerPod(pod *corev1.Pod) (*agonesv1.GameServer, *corev1.Node, bool, error) {
 	if pod.Spec.NodeName == "" || !pod.ObjectMeta.DeletionTimestamp.IsZero() || !isGameServerPod(pod) {
 		return nil, nil, false, nil
 	}
@@ -144,7 +145,7 @@ func (mc *MigrationController) isMigratingGameServerPod(pod *k8sv1.Pod) (*agones
 			mc.loggerForGameServerKey(key).Debug("GameServer is no longer available for syncing")
 			return nil, nil, false, nil
 		}
-		return nil, nil, false, errors.Wrapf(err, "error retrieving GameServer %s from namespace %s", pod.ObjectMeta.Name, pod.ObjectMeta.Namespace)
+		return nil, nil, false, mc.errs.Wrapf(err, "error retrieving GameServer %s from namespace %s", pod.ObjectMeta.Name, pod.ObjectMeta.Namespace)
 	}
 
 	// Either the address has not been set, or we're being deleted already
@@ -153,7 +154,7 @@ func (mc *MigrationController) isMigratingGameServerPod(pod *k8sv1.Pod) (*agones
 	}
 
 	if pod.Spec.NodeName == "" {
-		return nil, nil, false, workerqueue.NewTraceError(errors.Errorf("node not yet populated for Pod %s", pod.ObjectMeta.Name))
+		return nil, nil, false, workerqueue.NewTraceError(mc.errs.Errorf("node not yet populated for Pod %s", pod.ObjectMeta.Name))
 	}
 
 	node, err := mc.nodeLister.Get(pod.Spec.NodeName)
@@ -162,7 +163,7 @@ func (mc *MigrationController) isMigratingGameServerPod(pod *k8sv1.Pod) (*agones
 			mc.loggerForGameServerKey(key).WithField("node", pod.Spec.NodeName).Debug("Node is no longer available for syncing")
 			return nil, nil, false, nil
 		}
-		return nil, nil, false, errors.Wrapf(err, "error retrieving node %s for Pod %s", pod.Spec.NodeName, pod.ObjectMeta.Name)
+		return nil, nil, false, mc.errs.Wrapf(err, "error retrieving node %s for Pod %s", pod.Spec.NodeName, pod.ObjectMeta.Name)
 	}
 
 	// if the node is being terminated, then also escape, because the Pod is going to be Terminated if it hasn't been
@@ -187,7 +188,7 @@ func (mc *MigrationController) syncGameServer(ctx context.Context, key string) e
 	namespace, name, err := cache.SplitMetaNamespaceKey(key)
 	if err != nil {
 		// don't return an error, as we don't want this retried
-		runtime.HandleError(mc.loggerForGameServerKey(key), errors.Wrapf(err, "invalid resource key"))
+		runtime.HandleError(mc.loggerForGameServerKey(key), mc.errs.Wrap(err, "invalid resource key"))
 		return nil
 	}
 
@@ -197,7 +198,7 @@ func (mc *MigrationController) syncGameServer(ctx context.Context, key string) e
 			mc.loggerForGameServerKey(key).Debug("Pod is no longer available for syncing")
 			return nil
 		}
-		return errors.Wrapf(err, "error retrieving Pod %s from namespace %s", name, namespace)
+		return mc.errs.Wrapf(err, "error retrieving Pod %s from namespace %s", name, namespace)
 	}
 
 	gs, node, ok, err := mc.isMigratingGameServerPod(pod)
@@ -231,7 +232,7 @@ func (mc *MigrationController) syncGameServer(ctx context.Context, key string) e
 	return nil
 }
 
-func (mc *MigrationController) anyAddressMatch(node *k8sv1.Node, gs *agonesv1.GameServer) bool {
+func (mc *MigrationController) anyAddressMatch(node *corev1.Node, gs *agonesv1.GameServer) bool {
 	var nodeAddresses []string
 	for _, a := range node.Status.Addresses {
 		if a.Address == gs.Status.Address {
