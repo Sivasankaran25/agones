@@ -20,6 +20,7 @@ import (
 	"crypto/x509"
 	goErrors "errors"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
@@ -114,6 +115,7 @@ type Allocator struct {
 	remoteAllocationTimeout      time.Duration
 	totalRemoteAllocationTimeout time.Duration
 	batchWaitTime                time.Duration
+	listMaxCapacity              int64
 	errs                         *errors.Errors
 }
 
@@ -133,7 +135,8 @@ type response struct {
 
 // NewAllocator creates an instance of Allocator
 func NewAllocator(policyInformer multiclusterinformerv1.GameServerAllocationPolicyInformer, secretInformer informercorev1.SecretInformer, gameServerGetter getterv1.GameServersGetter,
-	kubeClient kubernetes.Interface, allocationCache *AllocationCache, remoteAllocationTimeout time.Duration, totalRemoteAllocationTimeout time.Duration, batchWaitTime time.Duration) *Allocator {
+	kubeClient kubernetes.Interface, allocationCache *AllocationCache, remoteAllocationTimeout time.Duration, totalRemoteAllocationTimeout time.Duration, batchWaitTime time.Duration,
+	listMaxCapacity int64) *Allocator {
 	ah := &Allocator{
 		pendingRequests:              make(chan request, maxBatchQueue),
 		allocationPolicyLister:       policyInformer.Lister(),
@@ -143,6 +146,7 @@ func NewAllocator(policyInformer multiclusterinformerv1.GameServerAllocationPoli
 		gameServerGetter:             gameServerGetter,
 		allocationCache:              allocationCache,
 		batchWaitTime:                batchWaitTime,
+		listMaxCapacity:              listMaxCapacity,
 		remoteAllocationTimeout:      remoteAllocationTimeout,
 		totalRemoteAllocationTimeout: totalRemoteAllocationTimeout,
 		remoteAllocationCallback: func(ctx context.Context, endpoint string, dialOpts grpc.DialOption, request *pb.AllocationRequest) (*pb.AllocationResponse, error) {
@@ -605,7 +609,7 @@ func (c *Allocator) ListenAndAllocate(ctx context.Context, updateWorkerCount int
 func (c *Allocator) allocationUpdateWorkers(ctx context.Context, workerCount int) chan<- response {
 	updateQueue := make(chan response)
 
-	for i := 0; i < workerCount; i++ {
+	for range workerCount {
 		go func() {
 			for {
 				select {
@@ -653,18 +657,14 @@ func (c *Allocator) applyAllocationToGameServer(ctx context.Context, mp allocati
 		if gs.ObjectMeta.Labels == nil {
 			gs.ObjectMeta.Labels = make(map[string]string, len(mp.Labels))
 		}
-		for key, value := range mp.Labels {
-			gs.ObjectMeta.Labels[key] = value
-		}
+		maps.Copy(gs.ObjectMeta.Labels, mp.Labels)
 	}
 
 	if gs.ObjectMeta.Annotations == nil {
 		gs.ObjectMeta.Annotations = make(map[string]string, len(mp.Annotations))
 	}
 	// apply annotations patch
-	for key, value := range mp.Annotations {
-		gs.ObjectMeta.Annotations[key] = value
-	}
+	maps.Copy(gs.ObjectMeta.Annotations, mp.Annotations)
 
 	// add last allocated, so it always gets updated, even if it is already Allocated
 	ts, err := time.Now().MarshalText()
@@ -674,7 +674,7 @@ func (c *Allocator) applyAllocationToGameServer(ctx context.Context, mp allocati
 	gs.ObjectMeta.Annotations[LastAllocatedAnnotationKey] = string(ts)
 	gs.Status.State = agonesv1.GameServerStateAllocated
 
-	// perfom any Counter or List actions
+	// perform any Counter or List actions
 	var counterErrors error
 	var listErrors error
 	if runtime.FeatureEnabled(runtime.FeatureCountsAndLists) {
@@ -685,7 +685,7 @@ func (c *Allocator) applyAllocationToGameServer(ctx context.Context, mp allocati
 		}
 		if gsa.Spec.Lists != nil {
 			for list, la := range gsa.Spec.Lists {
-				listErrors = goErrors.Join(listErrors, la.ListActions(list, gs))
+				listErrors = goErrors.Join(listErrors, la.ListActions(list, gs, c.listMaxCapacity))
 			}
 		}
 	}

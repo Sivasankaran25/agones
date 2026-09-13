@@ -49,6 +49,10 @@ import (
 	testclocks "k8s.io/utils/clock/testing"
 )
 
+// defaultTestListMaxCapacity mirrors the `gameservers.lists.maxItems` Helm default, which is what
+// the controller supplies to the sidecar via MAX_LIST_ITEMS in a real cluster.
+const defaultTestListMaxCapacity = int64(1000)
+
 // patchGameServer is a helper function for the AddReactor "patch" that creates and applies a patch
 // to a gameserver. Returns a patched copy and does not modify the original game server.
 func patchGameServer(t *testing.T, action k8stesting.Action, gs *agonesv1.GameServer) *agonesv1.GameServer {
@@ -207,7 +211,7 @@ func TestSidecarRun(t *testing.T) {
 				return true, gsCopy, nil
 			})
 
-			sc, err := NewSDKServer("test", "default", m.KubeClient, m.AgonesClient, logrus.DebugLevel, 8080, 500*time.Millisecond)
+			sc, err := NewSDKServer("test", "default", m.KubeClient, m.AgonesClient, logrus.DebugLevel, 8080, 500*time.Millisecond, defaultTestListMaxCapacity)
 			stop := make(chan struct{})
 			defer close(stop)
 			ctx, cancel := context.WithCancel(context.Background())
@@ -224,13 +228,11 @@ func TestSidecarRun(t *testing.T) {
 			}
 
 			wg := sync.WaitGroup{}
-			wg.Add(1)
 
-			go func() {
+			wg.Go(func() {
 				err := sc.Run(ctx)
 				assert.NoError(t, err)
-				wg.Done()
-			}()
+			})
 			v.f(sc, ctx)
 
 			select {
@@ -336,8 +338,7 @@ func TestSDKServerSyncGameServer(t *testing.T) {
 				return false, gsCopy, nil
 			})
 
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
+			ctx := t.Context()
 			sc.informerFactory.Start(ctx.Done())
 			assert.True(t, cache.WaitForCacheSync(ctx.Done(), sc.gameServerSynced))
 			sc.gsWaitForSync.Done()
@@ -398,8 +399,7 @@ func TestSidecarUpdateState(t *testing.T) {
 				return true, nil, nil
 			})
 
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
+			ctx := t.Context()
 			sc.informerFactory.Start(ctx.Done())
 			assert.True(t, cache.WaitForCacheSync(ctx.Done(), sc.gameServerSynced))
 			sc.gsWaitForSync.Done()
@@ -426,12 +426,10 @@ func TestSidecarHealthLastUpdated(t *testing.T) {
 	stream := newEmptyMockStream()
 
 	wg := sync.WaitGroup{}
-	wg.Add(1)
-	go func() {
+	wg.Go(func() {
 		err := sc.Health(stream)
 		assert.NoError(t, err)
-		wg.Done()
-	}()
+	})
 
 	// Test once with a single message
 	fc.Step(3 * time.Second)
@@ -464,7 +462,7 @@ func TestSidecarUnhealthyMessage(t *testing.T) {
 	t.Parallel()
 
 	m := agtesting.NewMocks()
-	sc, err := NewSDKServer("test", "default", m.KubeClient, m.AgonesClient, logrus.DebugLevel, 8080, 500*time.Millisecond)
+	sc, err := NewSDKServer("test", "default", m.KubeClient, m.AgonesClient, logrus.DebugLevel, 8080, 500*time.Millisecond, defaultTestListMaxCapacity)
 	require.NoError(t, err)
 
 	gs := agonesv1.GameServer{
@@ -488,8 +486,7 @@ func TestSidecarUnhealthyMessage(t *testing.T) {
 		return true, gsCopy, nil
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	stop := make(chan struct{})
 	defer close(stop)
 
@@ -534,12 +531,10 @@ func TestSidecarHealthy(t *testing.T) {
 	stream := newEmptyMockStream()
 
 	wg := sync.WaitGroup{}
-	wg.Add(1)
-	go func() {
+	wg.Go(func() {
 		err := sc.Health(stream)
 		assert.NoError(t, err)
-		wg.Done()
-	}()
+	})
 
 	fixtures := map[string]struct {
 		timeAdd         time.Duration
@@ -615,7 +610,7 @@ func TestSidecarHealthy(t *testing.T) {
 
 func TestSidecarHTTPHealthCheck(t *testing.T) {
 	m := agtesting.NewMocks()
-	sc, err := NewSDKServer("test", "default", m.KubeClient, m.AgonesClient, logrus.DebugLevel, 8080, 500*time.Millisecond)
+	sc, err := NewSDKServer("test", "default", m.KubeClient, m.AgonesClient, logrus.DebugLevel, 8080, 500*time.Millisecond, defaultTestListMaxCapacity)
 	require.NoError(t, err)
 
 	now := time.Now().Add(time.Hour).UTC()
@@ -718,8 +713,7 @@ func TestSDKServerWatchGameServer(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, sc.connectedStreams)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	sc.ctx = ctx
 	sc.informerFactory.Start(ctx.Done())
 
@@ -791,8 +785,7 @@ func TestSDKServerSendGameServerUpdate(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, sc.connectedStreams)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	sc.ctx = ctx
 	sc.informerFactory.Start(ctx.Done())
 
@@ -900,8 +893,7 @@ func TestSDKServerUpdateEventHandler(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, sc.connectedStreams)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	sc.ctx = ctx
 	sc.informerFactory.Start(ctx.Done())
 
@@ -974,13 +966,11 @@ func TestSDKServerReserveTimeoutOnRun(t *testing.T) {
 	assert.True(t, cache.WaitForCacheSync(ctx.Done(), sc.gameServerSynced))
 
 	wg := sync.WaitGroup{}
-	wg.Add(1)
 
-	go func() {
+	wg.Go(func() {
 		err = sc.Run(ctx)
 		assert.NoError(t, err)
-		wg.Done()
-	}()
+	})
 
 	select {
 	case gsStatus := <-updated:
@@ -1029,13 +1019,11 @@ func TestSDKServerReserveTimeout(t *testing.T) {
 	assert.True(t, cache.WaitForCacheSync(ctx.Done(), sc.gameServerSynced))
 
 	wg := sync.WaitGroup{}
-	wg.Add(1)
 
-	go func() {
+	wg.Go(func() {
 		err = sc.Run(ctx)
 		assert.NoError(t, err)
-		wg.Done()
-	}()
+	})
 
 	assertStateChange := func(expected agonesv1.GameServerState, additional func(status agonesv1.GameServerStatus)) {
 		select {
@@ -1327,13 +1315,11 @@ func TestSDKServerUpdateCounter(t *testing.T) {
 			assert.True(t, cache.WaitForCacheSync(ctx.Done(), sc.gameServerSynced))
 
 			wg := sync.WaitGroup{}
-			wg.Add(1)
 
-			go func() {
+			wg.Go(func() {
 				err = sc.Run(ctx)
 				assert.NoError(t, err)
-				wg.Done()
-			}()
+			})
 
 			// check initial value comes through
 			require.Eventually(t, func() bool {
@@ -1795,9 +1781,6 @@ func TestSDKServerUpdateList(t *testing.T) {
 			expectedUpdatesQueueLen: 0,
 		},
 	}
-	// Maximum capacity for the game server list.
-	// of game server items the system can manage at once.
-	GameServerListMaxCapacity = int64(1000)
 	// nolint:dupl  // Linter errors on lines are duplicate of TestSDKServerAddListValue, TestSDKServerRemoveListValue
 	for test, testCase := range fixtures {
 		t.Run(test, func(t *testing.T) {
@@ -1839,13 +1822,11 @@ func TestSDKServerUpdateList(t *testing.T) {
 			assert.True(t, cache.WaitForCacheSync(ctx.Done(), sc.gameServerSynced))
 
 			wg := sync.WaitGroup{}
-			wg.Add(1)
 
-			go func() {
+			wg.Go(func() {
 				err = sc.Run(ctx)
 				assert.NoError(t, err)
-				wg.Done()
-			}()
+			})
 
 			// check initial value comes through
 			require.Eventually(t, func() bool {
@@ -1950,13 +1931,11 @@ func TestSDKServerGracefulTerminationInterrupt(t *testing.T) {
 	assert.True(t, cache.WaitForCacheSync(sdkCtx.Done(), sc.gameServerSynced))
 
 	wg := sync.WaitGroup{}
-	wg.Add(1)
 
-	go func() {
+	wg.Go(func() {
 		err := sc.Run(sdkCtx)
 		assert.NoError(t, err)
-		wg.Done()
-	}()
+	})
 
 	assertContextCancelled := func(expected error, timeout time.Duration, ctx context.Context) {
 		select {
@@ -2016,13 +1995,11 @@ func TestSDKServerGracefulTerminationShutdown(t *testing.T) {
 	assert.True(t, cache.WaitForCacheSync(sdkCtx.Done(), sc.gameServerSynced))
 
 	wg := sync.WaitGroup{}
-	wg.Add(1)
 
-	go func() {
+	wg.Go(func() {
 		err = sc.Run(sdkCtx)
 		assert.NoError(t, err)
-		wg.Done()
-	}()
+	})
 
 	assertContextCancelled := func(expected error, timeout time.Duration, ctx context.Context) {
 		select {
@@ -2074,8 +2051,7 @@ func TestSDKServerGracefulTerminationGameServerStateChannel(t *testing.T) {
 	sc, err := defaultSidecar(m)
 	assert.NoError(t, err)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	sdkCtx := sc.NewSDKServerContext(ctx)
 	sc.informerFactory.Start(sdkCtx.Done())
 	assert.True(t, cache.WaitForCacheSync(sdkCtx.Done(), sc.gameServerSynced))
@@ -2092,7 +2068,7 @@ func TestSDKServerGracefulTerminationGameServerStateChannel(t *testing.T) {
 }
 
 func defaultSidecar(m agtesting.Mocks) (*SDKServer, error) {
-	server, err := NewSDKServer("test", "default", m.KubeClient, m.AgonesClient, logrus.DebugLevel, 8080, 500*time.Millisecond)
+	server, err := NewSDKServer("test", "default", m.KubeClient, m.AgonesClient, logrus.DebugLevel, 8080, 500*time.Millisecond, defaultTestListMaxCapacity)
 	if err != nil {
 		return server, err
 	}
@@ -2175,6 +2151,85 @@ func TestSetAnnotation_NilAndOverlimit(t *testing.T) {
 			st, ok := status.FromError(err)
 			assert.True(t, ok)
 			assert.Equal(t, codes.InvalidArgument, st.Code())
+		})
+	}
+}
+
+// TestSDKServerUpdateListMaxCapacity verifies that UpdateList range-checks against the limit the
+// SDKServer was constructed with, rather than a hardcoded 1000. In a cluster that limit originates
+// from the `gameservers.lists.maxItems` Helm value, arriving via the MAX_LIST_ITEMS env var.
+func TestSDKServerUpdateListMaxCapacity(t *testing.T) {
+	t.Parallel()
+	agruntime.FeatureTestMutex.Lock()
+	defer agruntime.FeatureTestMutex.Unlock()
+
+	require.NoError(t, agruntime.ParseFeatures(string(agruntime.FeatureCountsAndLists)+"=true"))
+
+	const listMaxCapacity = int64(25)
+
+	fixtures := map[string]struct {
+		capacity int64
+		wantErr  bool
+	}{
+		"at the configured maximum":    {capacity: listMaxCapacity, wantErr: false},
+		"above the configured maximum": {capacity: listMaxCapacity + 1, wantErr: true},
+		// Would have been accepted under the old hardcoded [0,1000] check.
+		"between the configured maximum and the old hardcoded 1000": {capacity: 500, wantErr: true},
+		"negative": {capacity: -1, wantErr: true},
+	}
+
+	for test, testCase := range fixtures {
+		t.Run(test, func(t *testing.T) {
+			m := agtesting.NewMocks()
+
+			gs := agonesv1.GameServer{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test", Namespace: "default", ResourceVersion: "0", Generation: 1,
+				},
+				Spec: agonesv1.GameServerSpec{
+					SdkServer: agonesv1.SdkServer{LogLevel: "Debug"},
+				},
+				Status: agonesv1.GameServerStatus{
+					Lists: map[string]agonesv1.ListStatus{
+						// Deliberately not named "players": the removed GsListsMaxItems only ever
+						// discovered a limit from a list with that name.
+						"rooms": {Values: []string{"one"}, Capacity: int64(5)},
+					},
+				},
+			}
+			gs.ApplyDefaults()
+
+			m.AgonesClient.AddReactor("list", "gameservers", func(_ k8stesting.Action) (bool, runtime.Object, error) {
+				return true, &agonesv1.GameServerList{Items: []agonesv1.GameServer{*gs.DeepCopy()}}, nil
+			})
+			m.AgonesClient.AddReactor("patch", "gameservers", func(action k8stesting.Action) (bool, runtime.Object, error) {
+				return true, patchGameServer(t, action, &gs), nil
+			})
+
+			ctx := t.Context()
+
+			sc, err := NewSDKServer("test", "default", m.KubeClient, m.AgonesClient,
+				logrus.DebugLevel, 8080, 500*time.Millisecond, listMaxCapacity)
+			require.NoError(t, err)
+			sc.recorder = m.FakeRecorder
+
+			require.NoError(t, sc.WaitForConnection(ctx))
+			sc.informerFactory.Start(ctx.Done())
+			require.True(t, cache.WaitForCacheSync(ctx.Done(), sc.gameServerSynced))
+			sc.gsWaitForSync.Done()
+
+			_, err = sc.UpdateList(ctx, &beta.UpdateListRequest{
+				List:       &beta.List{Name: "rooms", Capacity: testCase.capacity},
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"capacity"}},
+			})
+
+			if testCase.wantErr {
+				require.Error(t, err)
+				// The limit must be reported accurately, not as the old hardcoded [0,1000].
+				assert.Contains(t, err.Error(), "Capacity must be within range [0,25]")
+			} else {
+				require.NoError(t, err)
+			}
 		})
 	}
 }

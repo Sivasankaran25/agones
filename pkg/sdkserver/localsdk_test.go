@@ -17,6 +17,7 @@ package sdkserver
 import (
 	"context"
 	"encoding/json"
+	stderrors "errors"
 	"fmt"
 	"os"
 	"sync"
@@ -24,7 +25,6 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/testing/protocmp"
@@ -42,7 +42,7 @@ import (
 func TestLocal(t *testing.T) {
 	ctx := context.Background()
 	e := &sdk.Empty{}
-	l, err := NewLocalSDKServer("", "")
+	l, err := NewLocalSDKServer("", "", defaultTestListMaxCapacity)
 	assert.NoError(t, err)
 
 	_, err = l.Ready(ctx, e)
@@ -82,7 +82,7 @@ func TestLocal(t *testing.T) {
 }
 
 func TestLocalSDKWithTestMode(t *testing.T) {
-	l, err := NewLocalSDKServer("", "")
+	l, err := NewLocalSDKServer("", "", defaultTestListMaxCapacity)
 	assert.NoError(t, err, "Should be able to create local SDK server")
 	a := []string{"ready", "allocate", "setlabel", "setannotation", "gameserver", "health", "shutdown", "watch"}
 	b := []string{"ready", "health", "ready", "watch", "allocate", "gameserver", "setlabel", "setannotation", "health", "health", "shutdown"}
@@ -107,7 +107,7 @@ func TestLocalSDKWithGameServer(t *testing.T) {
 	path, err := gsToTmpFile(fixture.DeepCopy())
 	assert.NoError(t, err)
 
-	l, err := NewLocalSDKServer(path, "")
+	l, err := NewLocalSDKServer(path, "", defaultTestListMaxCapacity)
 	assert.NoError(t, err)
 
 	gs, err := l.GetGameServer(ctx, e)
@@ -130,7 +130,7 @@ func TestLocalSDKWithLogLevel(t *testing.T) {
 	path, err := gsToTmpFile(fixture.DeepCopy())
 	assert.NoError(t, err)
 
-	l, err := NewLocalSDKServer(path, "test")
+	l, err := NewLocalSDKServer(path, "test", defaultTestListMaxCapacity)
 	assert.NoError(t, err)
 
 	_, err = l.GetGameServer(ctx, e)
@@ -165,24 +165,22 @@ func TestLocalSDKServerSetLabel(t *testing.T) {
 			path, err := gsToTmpFile(v.gs)
 			assert.NoError(t, err)
 
-			l, err := NewLocalSDKServer(path, "")
+			l, err := NewLocalSDKServer(path, "", defaultTestListMaxCapacity)
 			assert.NoError(t, err)
 			kv := &sdk.KeyValue{Key: "foo", Value: "bar"}
 
 			stream := newGameServerMockStream()
 			wg := sync.WaitGroup{}
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				err := l.WatchGameServer(e, stream)
 				assert.NoError(t, err)
-			}()
+			})
 			assertInitialWatchUpdate(t, stream)
 
 			// make sure length of l.updateObservers is at least 1
 			err = wait.PollUntilContextTimeout(context.Background(), time.Second, 10*time.Second, true, func(_ context.Context) (bool, error) {
 				ret := false
-				l.updateObservers.Range(func(_, _ interface{}) bool {
+				l.updateObservers.Range(func(_, _ any) bool {
 					ret = true
 					return false
 				})
@@ -198,7 +196,7 @@ func TestLocalSDKServerSetLabel(t *testing.T) {
 			assert.NoError(t, err)
 			assert.Equal(t, "bar", gs.ObjectMeta.Labels[metadataPrefix+"foo"])
 
-			assertWatchUpdate(t, stream, "bar", func(gs *sdk.GameServer) interface{} {
+			assertWatchUpdate(t, stream, "bar", func(gs *sdk.GameServer) any {
 				return gs.ObjectMeta.Labels[metadataPrefix+"foo"]
 			})
 
@@ -233,25 +231,23 @@ func TestLocalSDKServerSetAnnotation(t *testing.T) {
 			path, err := gsToTmpFile(v.gs)
 			assert.NoError(t, err)
 
-			l, err := NewLocalSDKServer(path, "")
+			l, err := NewLocalSDKServer(path, "", defaultTestListMaxCapacity)
 			assert.NoError(t, err)
 
 			kv := &sdk.KeyValue{Key: "bar", Value: "foo"}
 
 			stream := newGameServerMockStream()
 			wg := sync.WaitGroup{}
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				err := l.WatchGameServer(e, stream)
 				assert.NoError(t, err)
-			}()
+			})
 			assertInitialWatchUpdate(t, stream)
 
 			// make sure length of l.updateObservers is at least 1
 			err = wait.PollUntilContextTimeout(context.Background(), time.Second, 10*time.Second, true, func(_ context.Context) (bool, error) {
 				ret := false
-				l.updateObservers.Range(func(_, _ interface{}) bool {
+				l.updateObservers.Range(func(_, _ any) bool {
 					ret = true
 					return false
 				})
@@ -267,7 +263,7 @@ func TestLocalSDKServerSetAnnotation(t *testing.T) {
 			assert.NoError(t, err)
 			assert.Equal(t, "foo", gs.ObjectMeta.Annotations[metadataPrefix+"bar"])
 
-			assertWatchUpdate(t, stream, "foo", func(gs *sdk.GameServer) interface{} {
+			assertWatchUpdate(t, stream, "foo", func(gs *sdk.GameServer) any {
 				return gs.ObjectMeta.Annotations[metadataPrefix+"bar"]
 			})
 
@@ -285,7 +281,7 @@ func TestLocalSDKServerWatchGameServer(t *testing.T) {
 	assert.NoError(t, err)
 
 	e := &sdk.Empty{}
-	l, err := NewLocalSDKServer(path, "")
+	l, err := NewLocalSDKServer(path, "", defaultTestListMaxCapacity)
 	assert.NoError(t, err)
 
 	stream := newGameServerMockStream()
@@ -298,7 +294,7 @@ func TestLocalSDKServerWatchGameServer(t *testing.T) {
 	// wait for watching to begin
 	err = wait.PollUntilContextTimeout(context.Background(), time.Second, 10*time.Second, true, func(_ context.Context) (bool, error) {
 		found := false
-		l.updateObservers.Range(func(_, _ interface{}) bool {
+		l.updateObservers.Range(func(_, _ any) bool {
 			found = true
 			return false
 		})
@@ -314,7 +310,7 @@ func TestLocalSDKServerWatchGameServer(t *testing.T) {
 	err = os.WriteFile(path, j, os.ModeDevice)
 	assert.NoError(t, err)
 
-	assertWatchUpdate(t, stream, "bar", func(gs *sdk.GameServer) interface{} {
+	assertWatchUpdate(t, stream, "bar", func(gs *sdk.GameServer) any {
 		return gs.ObjectMeta.Annotations["foo"]
 	})
 }
@@ -338,7 +334,7 @@ func TestLocalSDKServerGetCounter(t *testing.T) {
 
 	path, err := gsToTmpFile(fixture)
 	assert.NoError(t, err)
-	l, err := NewLocalSDKServer(path, "")
+	l, err := NewLocalSDKServer(path, "", defaultTestListMaxCapacity)
 	assert.NoError(t, err)
 
 	stream := newGameServerMockStream()
@@ -351,7 +347,7 @@ func TestLocalSDKServerGetCounter(t *testing.T) {
 	// wait for watching to begin
 	err = wait.PollUntilContextTimeout(context.Background(), time.Second, 10*time.Second, true, func(_ context.Context) (bool, error) {
 		found := false
-		l.updateObservers.Range(func(_, _ interface{}) bool {
+		l.updateObservers.Range(func(_, _ any) bool {
 			found = true
 			return false
 		})
@@ -370,7 +366,7 @@ func TestLocalSDKServerGetCounter(t *testing.T) {
 		},
 		"Counter does not exist": {
 			name:    "noName",
-			wantErr: errors.Errorf("not found. %s Counter not found", "noName"),
+			wantErr: fmt.Errorf("not found. %s Counter not found", "noName"),
 		},
 	}
 
@@ -385,7 +381,7 @@ func TestLocalSDKServerGetCounter(t *testing.T) {
 				}
 			} else {
 				// Check tests expecting errors
-				assert.EqualError(t, err, testScenario.wantErr.Error())
+				assert.ErrorContains(t, err, testScenario.wantErr.Error())
 			}
 		})
 	}
@@ -414,7 +410,7 @@ func TestLocalSDKServerUpdateCounter(t *testing.T) {
 
 	path, err := gsToTmpFile(fixture)
 	assert.NoError(t, err)
-	l, err := NewLocalSDKServer(path, "")
+	l, err := NewLocalSDKServer(path, "", defaultTestListMaxCapacity)
 	assert.NoError(t, err)
 
 	stream := newGameServerMockStream()
@@ -427,7 +423,7 @@ func TestLocalSDKServerUpdateCounter(t *testing.T) {
 	// wait for watching to begin
 	err = wait.PollUntilContextTimeout(context.Background(), time.Second, 10*time.Second, true, func(_ context.Context) (bool, error) {
 		found := false
-		l.updateObservers.Range(func(_, _ interface{}) bool {
+		l.updateObservers.Range(func(_, _ any) bool {
 			found = true
 			return false
 		})
@@ -476,7 +472,7 @@ func TestLocalSDKServerUpdateCounter(t *testing.T) {
 					Name:      "sessions",
 					CountDiff: -2,
 				}},
-			wantErr: errors.Errorf("out of range. Count must be within range [0,Capacity]. Found Count: %d, Capacity: %d", -1, 100),
+			wantErr: fmt.Errorf("out of range. Count must be within range [0,Capacity]. Found Count: %d, Capacity: %d", -1, 100),
 		},
 		"Cannot Increment Counter": {
 			updateRequest: &beta.UpdateCounterRequest{
@@ -484,7 +480,7 @@ func TestLocalSDKServerUpdateCounter(t *testing.T) {
 					Name:      "players",
 					CountDiff: 1,
 				}},
-			wantErr: errors.Errorf("out of range. Count must be within range [0,Capacity]. Found Count: %d, Capacity: %d", 101, 100),
+			wantErr: fmt.Errorf("out of range. Count must be within range [0,Capacity]. Found Count: %d, Capacity: %d", 101, 100),
 		},
 		"Counter does not exist": {
 			updateRequest: &beta.UpdateCounterRequest{
@@ -492,13 +488,13 @@ func TestLocalSDKServerUpdateCounter(t *testing.T) {
 					Name:      "dragons",
 					CountDiff: 1,
 				}},
-			wantErr: errors.Errorf("not found. %s Counter not found", "dragons"),
+			wantErr: fmt.Errorf("not found. %s Counter not found", "dragons"),
 		},
 		"request Counter is nil": {
 			updateRequest: &beta.UpdateCounterRequest{
 				CounterUpdateRequest: nil,
 			},
-			wantErr: errors.Errorf("invalid argument. CounterUpdateRequest cannot be nil"),
+			wantErr: stderrors.New("invalid argument. CounterUpdateRequest cannot be nil"),
 		},
 		"capacity is less than zero": {
 			updateRequest: &beta.UpdateCounterRequest{
@@ -506,7 +502,7 @@ func TestLocalSDKServerUpdateCounter(t *testing.T) {
 					Name:     "lobbies",
 					Capacity: wrapperspb.Int64(-1),
 				}},
-			wantErr: errors.Errorf("out of range. Capacity must be greater than or equal to 0. Found Capacity: %d", -1),
+			wantErr: fmt.Errorf("out of range. Capacity must be greater than or equal to 0. Found Capacity: %d", -1),
 		},
 		"count is less than zero": {
 			updateRequest: &beta.UpdateCounterRequest{
@@ -514,7 +510,7 @@ func TestLocalSDKServerUpdateCounter(t *testing.T) {
 					Name:  "players",
 					Count: wrapperspb.Int64(-1),
 				}},
-			wantErr: errors.Errorf("out of range. Count must be within range [0,Capacity]. Found Count: %d, Capacity: %d", -1, 100),
+			wantErr: fmt.Errorf("out of range. Count must be within range [0,Capacity]. Found Count: %d, Capacity: %d", -1, 100),
 		},
 		"count is greater than capacity": {
 			updateRequest: &beta.UpdateCounterRequest{
@@ -522,7 +518,7 @@ func TestLocalSDKServerUpdateCounter(t *testing.T) {
 					Name:  "players",
 					Count: wrapperspb.Int64(101),
 				}},
-			wantErr: errors.Errorf("out of range. Count must be within range [0,Capacity]. Found Count: %d, Capacity: %d", 101, 100),
+			wantErr: fmt.Errorf("out of range. Count must be within range [0,Capacity]. Found Count: %d, Capacity: %d", 101, 100),
 		},
 	}
 
@@ -562,7 +558,7 @@ func TestLocalSDKServerGetList(t *testing.T) {
 
 	path, err := gsToTmpFile(fixture)
 	assert.NoError(t, err)
-	l, err := NewLocalSDKServer(path, "")
+	l, err := NewLocalSDKServer(path, "", defaultTestListMaxCapacity)
 	assert.NoError(t, err)
 
 	stream := newGameServerMockStream()
@@ -575,7 +571,7 @@ func TestLocalSDKServerGetList(t *testing.T) {
 	// wait for watching to begin
 	err = wait.PollUntilContextTimeout(context.Background(), time.Second, 10*time.Second, true, func(_ context.Context) (bool, error) {
 		found := false
-		l.updateObservers.Range(func(_, _ interface{}) bool {
+		l.updateObservers.Range(func(_, _ any) bool {
 			found = true
 			return false
 		})
@@ -594,7 +590,7 @@ func TestLocalSDKServerGetList(t *testing.T) {
 		},
 		"List does not exist": {
 			name:    "noName",
-			wantErr: errors.Errorf("not found. %s List not found", "noName"),
+			wantErr: fmt.Errorf("not found. %s List not found", "noName"),
 		},
 	}
 
@@ -609,7 +605,7 @@ func TestLocalSDKServerGetList(t *testing.T) {
 				}
 			} else {
 				// Check tests expecting errors
-				assert.EqualError(t, err, testScenario.wantErr.Error())
+				assert.ErrorContains(t, err, testScenario.wantErr.Error())
 			}
 		})
 	}
@@ -639,7 +635,7 @@ func TestLocalSDKServerUpdateList(t *testing.T) {
 
 	path, err := gsToTmpFile(fixture)
 	assert.NoError(t, err)
-	l, err := NewLocalSDKServer(path, "")
+	l, err := NewLocalSDKServer(path, "", defaultTestListMaxCapacity)
 	assert.NoError(t, err)
 
 	stream := newGameServerMockStream()
@@ -652,7 +648,7 @@ func TestLocalSDKServerUpdateList(t *testing.T) {
 	// wait for watching to begin
 	err = wait.PollUntilContextTimeout(context.Background(), time.Second, 10*time.Second, true, func(_ context.Context) (bool, error) {
 		found := false
-		l.updateObservers.Range(func(_, _ interface{}) bool {
+		l.updateObservers.Range(func(_, _ any) bool {
 			found = true
 			return false
 		})
@@ -728,21 +724,21 @@ func TestLocalSDKServerUpdateList(t *testing.T) {
 				},
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"capacity"}},
 			},
-			wantErr: errors.Errorf("not found. %s List not found", "dragons"),
+			wantErr: fmt.Errorf("not found. %s List not found", "dragons"),
 		},
 		"request List is nil": {
 			updateRequest: &beta.UpdateListRequest{
 				List:       nil,
 				UpdateMask: &fieldmaskpb.FieldMask{},
 			},
-			wantErr: errors.Errorf("invalid argument. List: %v and UpdateMask %v cannot be nil", nil, &fieldmaskpb.FieldMask{}),
+			wantErr: fmt.Errorf("invalid argument. List: %v and UpdateMask %v cannot be nil", nil, &fieldmaskpb.FieldMask{}),
 		},
 		"request UpdateMask is nil": {
 			updateRequest: &beta.UpdateListRequest{
 				List:       &beta.List{},
 				UpdateMask: nil,
 			},
-			wantErr: errors.Errorf("invalid argument. List: %v and UpdateMask %v cannot be nil", &beta.List{}, nil),
+			wantErr: fmt.Errorf("invalid argument. List: %v and UpdateMask %v cannot be nil", &beta.List{}, nil),
 		},
 		"updateMask contains invalid path": {
 			updateRequest: &beta.UpdateListRequest{
@@ -751,7 +747,7 @@ func TestLocalSDKServerUpdateList(t *testing.T) {
 				},
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"foo"}},
 			},
-			wantErr: errors.Errorf("invalid argument. Field Mask Path(s): [foo] are invalid for List. Use valid field name(s): "),
+			wantErr: stderrors.New("invalid argument. Field Mask Path(s): [foo] are invalid for List. Use valid field name(s): "),
 		},
 		"updateMask is empty": {
 			updateRequest: &beta.UpdateListRequest{
@@ -760,7 +756,7 @@ func TestLocalSDKServerUpdateList(t *testing.T) {
 				},
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{""}},
 			},
-			wantErr: errors.Errorf("invalid argument. Field Mask Path(s): [] are invalid for List. Use valid field name(s): "),
+			wantErr: stderrors.New("invalid argument. Field Mask Path(s): [] are invalid for List. Use valid field name(s): "),
 		},
 		"capacity is less than zero": {
 			updateRequest: &beta.UpdateListRequest{
@@ -770,7 +766,7 @@ func TestLocalSDKServerUpdateList(t *testing.T) {
 				},
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"capacity"}},
 			},
-			wantErr: errors.Errorf("out of range. Capacity must be within range [0,1000]. Found Capacity: %d", -1),
+			wantErr: fmt.Errorf("out of range. Capacity must be within range [0,1000]. Found Capacity: %d", -1),
 		},
 		"capacity greater than max capacity (1000)": {
 			updateRequest: &beta.UpdateListRequest{
@@ -780,7 +776,7 @@ func TestLocalSDKServerUpdateList(t *testing.T) {
 				},
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"capacity"}},
 			},
-			wantErr: errors.Errorf("out of range. Capacity must be within range [0,1000]. Found Capacity: %d", 1001),
+			wantErr: fmt.Errorf("out of range. Capacity must be within range [0,1000]. Found Capacity: %d", 1001),
 		},
 		"capacity is less than List length": {
 			updateRequest: &beta.UpdateListRequest{
@@ -835,7 +831,7 @@ func TestLocalSDKServerAddListValue(t *testing.T) {
 
 	path, err := gsToTmpFile(fixture)
 	assert.NoError(t, err)
-	l, err := NewLocalSDKServer(path, "")
+	l, err := NewLocalSDKServer(path, "", defaultTestListMaxCapacity)
 	assert.NoError(t, err)
 
 	stream := newGameServerMockStream()
@@ -848,7 +844,7 @@ func TestLocalSDKServerAddListValue(t *testing.T) {
 	// wait for watching to begin
 	err = wait.PollUntilContextTimeout(context.Background(), time.Second, 10*time.Second, true, func(_ context.Context) (bool, error) {
 		found := false
-		l.updateObservers.Range(func(_, _ interface{}) bool {
+		l.updateObservers.Range(func(_, _ any) bool {
 			found = true
 			return false
 		})
@@ -872,21 +868,21 @@ func TestLocalSDKServerAddListValue(t *testing.T) {
 			addRequest: &beta.AddListValueRequest{
 				Name: "dragons",
 			},
-			wantErr: errors.Errorf("not found. %s List not found", "dragons"),
+			wantErr: fmt.Errorf("not found. %s List not found", "dragons"),
 		},
 		"add more values than capacity": {
 			addRequest: &beta.AddListValueRequest{
 				Name:  "hacks",
 				Value: "hack3",
 			},
-			wantErr: errors.Errorf("out of range. No available capacity. Current Capacity: %d, List Size: %d", int64(2), int64(2)),
+			wantErr: fmt.Errorf("out of range. No available capacity. Current Capacity: %d, List Size: %d", int64(2), int64(2)),
 		},
 		"add existing value": {
 			addRequest: &beta.AddListValueRequest{
 				Name:  "lemmings",
 				Value: "lemming1",
 			},
-			wantErr: errors.Errorf("already exists. Value: %s already in List: %s", "lemming1", "lemmings"),
+			wantErr: fmt.Errorf("already exists. Value: %s already in List: %s", "lemming1", "lemmings"),
 		},
 	}
 
@@ -927,7 +923,7 @@ func TestLocalSDKServerRemoveListValue(t *testing.T) {
 
 	path, err := gsToTmpFile(fixture)
 	assert.NoError(t, err)
-	l, err := NewLocalSDKServer(path, "")
+	l, err := NewLocalSDKServer(path, "", defaultTestListMaxCapacity)
 	assert.NoError(t, err)
 
 	stream := newGameServerMockStream()
@@ -940,7 +936,7 @@ func TestLocalSDKServerRemoveListValue(t *testing.T) {
 	// wait for watching to begin
 	err = wait.PollUntilContextTimeout(context.Background(), time.Second, 10*time.Second, true, func(_ context.Context) (bool, error) {
 		found := false
-		l.updateObservers.Range(func(_, _ interface{}) bool {
+		l.updateObservers.Range(func(_, _ any) bool {
 			found = true
 			return false
 		})
@@ -964,14 +960,14 @@ func TestLocalSDKServerRemoveListValue(t *testing.T) {
 			removeRequest: &beta.RemoveListValueRequest{
 				Name: "dragons",
 			},
-			wantErr: errors.Errorf("not found. %s List not found", "dragons"),
+			wantErr: fmt.Errorf("not found. %s List not found", "dragons"),
 		},
 		"value does not exist": {
 			removeRequest: &beta.RemoveListValueRequest{
 				Name:  "items",
 				Value: "item3",
 			},
-			wantErr: errors.Errorf("not found. Value: %s not found in List: %s", "item3", "items"),
+			wantErr: fmt.Errorf("not found. Value: %s not found in List: %s", "item3", "items"),
 		},
 	}
 
@@ -996,7 +992,7 @@ func TestLocalSDKServerRemoveListValue(t *testing.T) {
 // GameServer object
 func TestLocalSDKServerStateUpdates(t *testing.T) {
 	t.Parallel()
-	l, err := NewLocalSDKServer("", "")
+	l, err := NewLocalSDKServer("", "", defaultTestListMaxCapacity)
 	assert.NoError(t, err)
 
 	ctx := context.Background()
@@ -1035,7 +1031,7 @@ func TestLocalSDKServerStateUpdates(t *testing.T) {
 func TestSDKConformanceFunctionality(t *testing.T) {
 	t.Parallel()
 
-	l, err := NewLocalSDKServer("", "")
+	l, err := NewLocalSDKServer("", "", defaultTestListMaxCapacity)
 	assert.NoError(t, err)
 	l.testMode = true
 	l.recordRequest("")
@@ -1049,7 +1045,7 @@ func TestSDKConformanceFunctionality(t *testing.T) {
 	expected = append(expected, "", setAnnotation)
 
 	wg := sync.WaitGroup{}
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		wg.Add(1)
 		str := fmt.Sprintf("%d", i)
 		expected = append(expected, str)
@@ -1078,7 +1074,7 @@ func gsToTmpFile(gs *agonesv1.GameServer) (string, error) {
 }
 
 // assertWatchUpdate checks the values of an update message when a GameServer value has been changed
-func assertWatchUpdate(t *testing.T, stream *gameServerMockStream, expected interface{}, actual func(gs *sdk.GameServer) interface{}) {
+func assertWatchUpdate(t *testing.T, stream *gameServerMockStream, expected any, actual func(gs *sdk.GameServer) any) {
 	select {
 	case msg := <-stream.msgs:
 		assert.Equal(t, expected, actual(msg))
@@ -1102,5 +1098,58 @@ func assertInitialWatchUpdate(t *testing.T, stream *gameServerMockStream) {
 	case <-stream.msgs:
 	case <-time.After(time.Second):
 		assert.Fail(t, "timeout on receiving initial message")
+	}
+}
+
+// TestLocalSDKServerUpdateListMaxCapacity verifies the local SDK server range-checks UpdateList
+// against the limit it was constructed with. Locally that comes from the --max-list-items flag,
+// which defaults to defaultMaxListItems rather than being discovered from the GameServer.
+func TestLocalSDKServerUpdateListMaxCapacity(t *testing.T) {
+	t.Parallel()
+
+	runtime.FeatureTestMutex.Lock()
+	defer runtime.FeatureTestMutex.Unlock()
+	require.NoError(t, runtime.ParseFeatures(string(runtime.FeatureCountsAndLists)+"=true"))
+
+	const listMaxCapacity = int64(25)
+
+	fixture := &agonesv1.GameServer{
+		ObjectMeta: metav1.ObjectMeta{Name: "stuff"},
+		Status: agonesv1.GameServerStatus{
+			// Deliberately not named "players": the removed GsLocalListsMaxItems only ever
+			// discovered a limit from a list with that name.
+			Lists: map[string]agonesv1.ListStatus{"rooms": {Capacity: 5, Values: []string{"one"}}},
+		},
+	}
+
+	path, err := gsToTmpFile(fixture)
+	require.NoError(t, err)
+	l, err := NewLocalSDKServer(path, "", listMaxCapacity)
+	require.NoError(t, err)
+
+	testScenarios := map[string]struct {
+		capacity int64
+		wantErr  bool
+	}{
+		"at the configured maximum":    {capacity: listMaxCapacity, wantErr: false},
+		"above the configured maximum": {capacity: listMaxCapacity + 1, wantErr: true},
+		// Would have been accepted under the old hardcoded [0,1000] check.
+		"between the configured maximum and the old hardcoded 1000": {capacity: 500, wantErr: true},
+		"negative": {capacity: -1, wantErr: true},
+	}
+
+	for test, testScenario := range testScenarios {
+		t.Run(test, func(t *testing.T) {
+			_, err := l.UpdateList(context.Background(), &beta.UpdateListRequest{
+				List:       &beta.List{Name: "rooms", Capacity: testScenario.capacity},
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"capacity"}},
+			})
+			if testScenario.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "Capacity must be within range [0,25]")
+			} else {
+				require.NoError(t, err)
+			}
+		})
 	}
 }
