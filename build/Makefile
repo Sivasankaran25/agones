@@ -24,7 +24,7 @@
 #
 
 # base version target. This is usually the next release.
-base_version = 1.61.0
+base_version = 1.62.0
 
 #
 # All of the following can be overwritten with environment variables
@@ -453,7 +453,8 @@ install: $(ensure-build-image) install-custom-pull-secret
 			helm uninstall agones --namespace=agones-system --wait --timeout=20m; \
 		fi || true'
 	$(DOCKER_RUN) \
-		helm upgrade --install --atomic --wait --timeout 10m --namespace=agones-system \
+		helm upgrade --install --rollback-on-failure --wait --timeout 10m --namespace=agones-system \
+		--server-side=false \
 		--create-namespace \
 		--set agones.image.tag=$(VERSION),agones.image.registry=$(REGISTRY) \
 		--set agones.image.controller.pullPolicy=$(IMAGE_PULL_POLICY),agones.image.controller.pullSecret=$(IMAGE_PULL_SECRET) \
