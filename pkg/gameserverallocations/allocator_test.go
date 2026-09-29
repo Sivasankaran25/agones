@@ -17,7 +17,6 @@ package gameserverallocations
 import (
 	"context"
 	"errors"
-	"fmt"
 	"testing"
 	"time"
 
@@ -48,7 +47,6 @@ const defaultTestListMaxCapacity = int64(1000)
 func TestAllocatorAllocate(t *testing.T) {
 	t.Parallel()
 
-	// TODO: remove when `CountsAndLists` feature flag is moved to stable.
 	runtime.FeatureTestMutex.Lock()
 	defer runtime.FeatureTestMutex.Unlock()
 
@@ -135,7 +133,6 @@ func TestAllocatorAllocate(t *testing.T) {
 func TestAllocatorAllocatePriority(t *testing.T) {
 	t.Parallel()
 
-	// TODO: remove when `CountsAndLists` feature flag is moved to stable.
 	runtime.FeatureTestMutex.Lock()
 	defer runtime.FeatureTestMutex.Unlock()
 
@@ -345,8 +342,7 @@ func TestAllocatorApplyAllocationToGameServerCountsListsActions(t *testing.T) {
 		wantLists    map[string]agonesv1.ListStatus
 	}{
 		"CounterActions increment and ListActions add, delete, and update capacity": {
-			features: fmt.Sprintf("%s=true", runtime.FeatureCountsAndLists),
-			gs:       &gs1,
+			gs: &gs1,
 			gsa: &allocationv1.GameServerAllocation{
 				ObjectMeta: metav1.ObjectMeta{Namespace: defaultNs},
 				Spec: allocationv1.GameServerAllocationSpec{
@@ -377,8 +373,7 @@ func TestAllocatorApplyAllocationToGameServerCountsListsActions(t *testing.T) {
 				}},
 		},
 		"CounterActions and ListActions truncate counter Count and update list capacity": {
-			features: fmt.Sprintf("%s=true", runtime.FeatureCountsAndLists),
-			gs:       &gs2,
+			gs: &gs2,
 			gsa: &allocationv1.GameServerAllocation{
 				ObjectMeta: metav1.ObjectMeta{Namespace: defaultNs},
 				Spec: allocationv1.GameServerAllocationSpec{
@@ -457,10 +452,8 @@ func TestAllocationApplyAllocationError(t *testing.T) {
 func TestAllocatorAllocateOnGameServerUpdateError(t *testing.T) {
 	t.Parallel()
 
-	// TODO: remove when `CountsAndLists` feature flag is moved to stable.
 	runtime.FeatureTestMutex.Lock()
 	defer runtime.FeatureTestMutex.Unlock()
-	require.NoError(t, runtime.ParseFeatures(fmt.Sprintf("%s=false", runtime.FeatureCountsAndLists)))
 
 	a, m := newFakeAllocator()
 	log := framework.TestLogger(t)
@@ -523,7 +516,6 @@ func TestAllocatorAllocateOnGameServerUpdateError(t *testing.T) {
 func TestAllocatorRunLocalAllocations(t *testing.T) {
 	t.Parallel()
 
-	// TODO: remove when `CountsAndLists` feature flag is moved to stable.
 	runtime.FeatureTestMutex.Lock()
 	defer runtime.FeatureTestMutex.Unlock()
 
@@ -676,7 +668,6 @@ func TestAllocatorRunLocalAllocationsCountsAndLists(t *testing.T) {
 
 	runtime.FeatureTestMutex.Lock()
 	defer runtime.FeatureTestMutex.Unlock()
-	require.NoError(t, runtime.ParseFeatures(string(runtime.FeatureCountsAndLists)+"=true"))
 
 	a, m := newFakeAllocator()
 

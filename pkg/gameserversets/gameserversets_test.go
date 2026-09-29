@@ -36,8 +36,6 @@ func TestSortGameServersByPackedStrategy(t *testing.T) {
 	utilruntime.FeatureTestMutex.Lock()
 	defer utilruntime.FeatureTestMutex.Unlock()
 
-	require.NoError(t, utilruntime.ParseFeatures(string(utilruntime.FeatureCountsAndLists)+"=true"))
-
 	nc := map[string]gameservers.NodeCount{
 		"n1": {Ready: 1, Allocated: 0},
 		"n2": {Ready: 0, Allocated: 2},
@@ -138,8 +136,6 @@ func TestSortGameServersByDistributedStrategy(t *testing.T) {
 
 	utilruntime.FeatureTestMutex.Lock()
 	defer utilruntime.FeatureTestMutex.Unlock()
-
-	require.NoError(t, utilruntime.ParseFeatures(string(utilruntime.FeatureCountsAndLists)+"=true"))
 
 	now := metav1.Now()
 

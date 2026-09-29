@@ -580,7 +580,6 @@ func TestFleetCountersAndListsMetrics(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	require.NoError(t, runtime.ParseFeatures(string(runtime.FeatureCountsAndLists)+"=true"))
 
 	resetMetrics()
 	reader := metricexport.NewReader()
