@@ -239,9 +239,6 @@ func TestFindGameServerForAllocationPacked(t *testing.T) {
 func TestFindGameServerForAllocationDistributed(t *testing.T) {
 	t.Parallel()
 
-	runtime.FeatureTestMutex.Lock()
-	defer runtime.FeatureTestMutex.Unlock()
-
 	controller, m := newFakeController()
 	c := controller.allocator.allocationCache
 	labels := map[string]string{"role": "gameserver"}

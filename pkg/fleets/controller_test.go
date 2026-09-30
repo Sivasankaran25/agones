@@ -574,9 +574,6 @@ func TestControllerUpdateFleetStatus(t *testing.T) {
 func TestControllerUpdateFleetCounterStatus(t *testing.T) {
 	t.Parallel()
 
-	utilruntime.FeatureTestMutex.Lock()
-	defer utilruntime.FeatureTestMutex.Unlock()
-
 	fleet := defaultFixture()
 	c, m := newFakeController()
 
@@ -661,9 +658,6 @@ func TestControllerUpdateFleetCounterStatus(t *testing.T) {
 // nolint:dupl // Linter errors on lines are duplicate of TestControllerUpdateFleetCounterStatus
 func TestControllerUpdateFleetListStatus(t *testing.T) {
 	t.Parallel()
-
-	utilruntime.FeatureTestMutex.Lock()
-	defer utilruntime.FeatureTestMutex.Unlock()
 
 	fleet := defaultFixture()
 	c, m := newFakeController()
@@ -1006,9 +1000,6 @@ func TestControllerUpsertGameServerSet(t *testing.T) {
 	})
 
 	t.Run("update Priorities", func(t *testing.T) {
-		utilruntime.FeatureTestMutex.Lock()
-		defer utilruntime.FeatureTestMutex.Unlock()
-
 		c, m := newFakeController()
 		// Default GameServerSet has no Priorities
 		gsSet := f.GameServerSet()

@@ -2382,9 +2382,6 @@ func TestApplyListPolicy(t *testing.T) {
 // logic counted un-deletable (Allocated) game servers toward a reduction, along with scaling up
 // and down against the Min/MaxCapacity limiter.
 func TestApplyListPolicyFlapping(t *testing.T) {
-	utilruntime.FeatureTestMutex.Lock()
-	defer utilruntime.FeatureTestMutex.Unlock()
-
 	// One replica provides 60 capacity; the buffer wants 120 available.
 	lp := &autoscalingv1.ListPolicy{
 		Key:         "players",

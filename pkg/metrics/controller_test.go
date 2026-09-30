@@ -575,9 +575,6 @@ func TestControllerGameServersNodeState(t *testing.T) {
 }
 
 func TestFleetCountersAndListsMetrics(t *testing.T) {
-	runtime.FeatureTestMutex.Lock()
-	defer runtime.FeatureTestMutex.Unlock()
-
 	mu.Lock()
 	defer mu.Unlock()
 

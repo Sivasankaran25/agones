@@ -543,7 +543,7 @@ func (c *Allocator) ListenAndAllocate(ctx context.Context, updateWorkerCount int
 				requestCount = 0
 			}
 
-			// SortKey returns the sorting values (list of Priorities) as a determinstic key.
+			// SortKey returns the sorting values (list of Priorities) as a deterministic key.
 			// In case gsa.Spec.Priorities is nil this will still return a sortKey.
 			// In case of error this will return 0 for the sortKey.
 			newSortKey, err := req.gsa.SortKey()

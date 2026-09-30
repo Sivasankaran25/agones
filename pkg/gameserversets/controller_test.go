@@ -467,9 +467,6 @@ func TestComputeStatus(t *testing.T) {
 	})
 
 	t.Run("lists with no gameservers", func(t *testing.T) {
-		utilruntime.FeatureTestMutex.Lock()
-		defer utilruntime.FeatureTestMutex.Unlock()
-
 		gsSet := defaultFixture()
 		gsSet.Spec.Template.Spec.Lists = map[string]agonesv1.ListStatus{
 			"firstList":  {Capacity: 10, Values: []string{"a", "b"}},
@@ -505,8 +502,6 @@ func TestComputeStatus(t *testing.T) {
 
 func TestControllerWatchGameServers(t *testing.T) {
 	t.Parallel()
-	utilruntime.FeatureTestMutex.Lock()
-	defer utilruntime.FeatureTestMutex.Unlock()
 
 	gsSet := defaultFixture()
 
