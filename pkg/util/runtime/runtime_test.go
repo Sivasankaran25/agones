@@ -18,7 +18,7 @@ package runtime
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -26,22 +26,25 @@ import (
 )
 
 func TestHandleError(t *testing.T) {
+	// apimachinery's ErrorHandlers is a package-level slice and the only seam
+	// for observing what HandleError forwards, so swap it out and restore it.
 	old := runtime.ErrorHandlers
-	defer func() { runtime.ErrorHandlers = old }()
+	defer func() { runtime.ErrorHandlers = old }() //nolint:reassign // restoring the swap below.
 	var result error
+	//nolint:reassign // deliberate test seam, restored by the defer above.
 	runtime.ErrorHandlers = []runtime.ErrorHandler{
-		func(_ context.Context, err error, _ string, _ ...interface{}) {
+		func(_ context.Context, err error, _ string, _ ...any) {
 			result = err
 		},
 	}
 	HandleError(nil, nil)
-	assert.Nil(t, result, "No Errors for now")
+	assert.NoError(t, result, "No Errors for now")
 
-	err := fmt.Errorf("test")
+	err := errors.New("test")
 	// test nil logger
 	logger := NewLoggerWithSource("test")
 	HandleError(logger.WithError(err), err)
-	if result != err {
+	if !errors.Is(result, err) {
 		t.Errorf("did not receive custom handler")
 	}
 }

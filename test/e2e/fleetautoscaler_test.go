@@ -71,7 +71,7 @@ func TestAutoscalerBasicFunctions(t *testing.T) {
 	stable := framework.AgonesClient.AgonesV1()
 	fleets := stable.Fleets(framework.Namespace)
 	flt, err := fleets.Create(ctx, defaultFleet(framework.Namespace), metav1.CreateOptions{})
-	if assert.Nil(t, err) {
+	if assert.NoError(t, err) {
 		defer fleets.Delete(ctx, flt.ObjectMeta.Name, metav1.DeleteOptions{}) // nolint:errcheck
 	}
 
@@ -89,14 +89,14 @@ func TestAutoscalerBasicFunctions(t *testing.T) {
 
 	// patch the autoscaler to increase MinReplicas and watch the fleet scale up
 	fas, err = patchFleetAutoscaler(ctx, fas, intstr.FromInt(int(bufferSize)), bufferSize+2, fas.Spec.Policy.Buffer.MaxReplicas)
-	assert.Nil(t, err, "could not patch fleetautoscaler")
+	assert.NoError(t, err, "could not patch fleetautoscaler")
 
 	// min replicas is now higher than buffer size, will scale to that level
 	framework.AssertFleetCondition(t, flt, e2e.FleetReadyCount(fas.Spec.Policy.Buffer.MinReplicas))
 
 	// patch the autoscaler to remove MinReplicas and watch the fleet scale down to bufferSize
 	fas, err = patchFleetAutoscaler(ctx, fas, intstr.FromInt(int(bufferSize)), 0, fas.Spec.Policy.Buffer.MaxReplicas)
-	assert.Nil(t, err, "could not patch fleetautoscaler")
+	assert.NoError(t, err, "could not patch fleetautoscaler")
 
 	bufferSize = int32(fas.Spec.Policy.Buffer.BufferSize.IntValue())
 	framework.AssertFleetCondition(t, flt, e2e.FleetReadyCount(bufferSize))
@@ -153,7 +153,7 @@ func TestFleetAutoscalerDefaultSyncInterval(t *testing.T) {
 	stable := framework.AgonesClient.AgonesV1()
 	fleets := stable.Fleets(framework.Namespace)
 	flt, err := fleets.Create(ctx, defaultFleet(framework.Namespace), metav1.CreateOptions{})
-	if assert.Nil(t, err) {
+	if assert.NoError(t, err) {
 		defer fleets.Delete(ctx, flt.ObjectMeta.Name, metav1.DeleteOptions{}) // nolint:errcheck
 	}
 
@@ -178,7 +178,7 @@ func TestFleetAutoscalerDefaultSyncInterval(t *testing.T) {
 		},
 	}
 	fas, err := fleetautoscalers.Create(ctx, defaultFas, metav1.CreateOptions{})
-	if assert.Nil(t, err) {
+	if assert.NoError(t, err) {
 		defer fleetautoscalers.Delete(ctx, fas.ObjectMeta.Name, metav1.DeleteOptions{}) // nolint:errcheck
 	} else {
 		// if we could not create the autoscaler, their is no point going further
@@ -254,7 +254,7 @@ func TestFleetAutoScalerRollingUpdate(t *testing.T) {
 		gssList, err := framework.AgonesClient.AgonesV1().GameServerSets(framework.Namespace).List(ctx,
 			metav1.ListOptions{LabelSelector: selector.String()})
 		require.NoError(c, err)
-		require.Equal(c, 2, len(gssList.Items))
+		require.Len(c, gssList.Items, 2)
 	}, 30*time.Second, 1*time.Second)
 
 	// Check that total number of gameservers in the system does not go lower than RollingUpdate
@@ -271,7 +271,7 @@ func TestFleetAutoScalerRollingUpdate(t *testing.T) {
 		gssList, err := framework.AgonesClient.AgonesV1().GameServerSets(framework.Namespace).List(ctx,
 			metav1.ListOptions{LabelSelector: selector.String()})
 		require.NoError(c, err)
-		require.Equal(c, 1, len(gssList.Items))
+		require.Len(c, gssList.Items, 1)
 
 	}, 5*time.Minute, 1*time.Second)
 }
@@ -287,7 +287,7 @@ func TestAutoscalerStressCreate(t *testing.T) {
 	alpha1 := framework.AgonesClient.AgonesV1()
 	fleets := alpha1.Fleets(framework.Namespace)
 	flt, err := fleets.Create(ctx, defaultFleet(framework.Namespace), metav1.CreateOptions{})
-	if assert.Nil(t, err) {
+	if assert.NoError(t, err) {
 		defer fleets.Delete(ctx, flt.ObjectMeta.Name, metav1.DeleteOptions{}) // nolint:errcheck
 	}
 
@@ -297,7 +297,7 @@ func TestAutoscalerStressCreate(t *testing.T) {
 
 	fleetautoscalers := framework.AgonesClient.AutoscalingV1().FleetAutoscalers(framework.Namespace)
 
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		fas := defaultFleetAutoscaler(flt, framework.Namespace)
 		bufferSize := r.Int31n(5)
 		minReplicas := r.Int31n(5)
@@ -321,26 +321,14 @@ func TestAutoscalerStressCreate(t *testing.T) {
 				log.WithField("fas", fas.ObjectMeta.Name).Info("Created!")
 				defer fleetautoscalers.Delete(ctx, fas.ObjectMeta.Name, metav1.DeleteOptions{}) // nolint:errcheck
 				require.True(t, valid,
-					fmt.Sprintf("FleetAutoscaler created even if the parameters are NOT valid: %d %d %d",
-						bufferSize,
-						fas.Spec.Policy.Buffer.MinReplicas,
-						fas.Spec.Policy.Buffer.MaxReplicas))
+					"FleetAutoscaler created even if the parameters are NOT valid: %d %d %d", bufferSize, fas.Spec.Policy.Buffer.MinReplicas, fas.Spec.Policy.Buffer.MaxReplicas)
 
-				expectedReplicas := bufferSize
-				if expectedReplicas < fas.Spec.Policy.Buffer.MinReplicas {
-					expectedReplicas = fas.Spec.Policy.Buffer.MinReplicas
-				}
-				if expectedReplicas > fas.Spec.Policy.Buffer.MaxReplicas {
-					expectedReplicas = fas.Spec.Policy.Buffer.MaxReplicas
-				}
+				expectedReplicas := min(max(bufferSize, fas.Spec.Policy.Buffer.MinReplicas), fas.Spec.Policy.Buffer.MaxReplicas)
 				// the fleet autoscaler should scale the fleet now to expectedReplicas
 				framework.AssertFleetCondition(t, flt, e2e.FleetReadyCount(expectedReplicas))
 			} else {
 				require.False(t, valid,
-					fmt.Sprintf("FleetAutoscaler NOT created even if the parameters are valid: %d %d %d (%s)",
-						bufferSize,
-						minReplicas,
-						maxReplicas, err))
+					"FleetAutoscaler NOT created even if the parameters are valid: %d %d %d (%s)", bufferSize, minReplicas, maxReplicas, err)
 			}
 		}()
 	}
@@ -351,7 +339,7 @@ func TestAutoscalerStressCreate(t *testing.T) {
 func patchFleetAutoscaler(ctx context.Context, fas *autoscalingv1.FleetAutoscaler, bufferSize intstr.IntOrString, minReplicas int32, maxReplicas int32) (*autoscalingv1.FleetAutoscaler, error) {
 	var bufferSizeFmt string
 	if bufferSize.Type == intstr.Int {
-		bufferSizeFmt = fmt.Sprintf("%d", bufferSize.IntValue())
+		bufferSizeFmt = strconv.Itoa(bufferSize.IntValue())
 	} else {
 		bufferSizeFmt = fmt.Sprintf("%q", bufferSize.String())
 	}
@@ -531,7 +519,7 @@ func TestFleetAutoscalerTLSWebhook(t *testing.T) {
 
 	secrets := framework.KubeClient.CoreV1().Secrets(defaultNS)
 	secr, err = secrets.Create(ctx, secr.DeepCopy(), metav1.CreateOptions{})
-	if assert.Nil(t, err) {
+	if assert.NoError(t, err) {
 		defer secrets.Delete(ctx, secr.ObjectMeta.Name, metav1.DeleteOptions{}) // nolint:errcheck
 	}
 
@@ -550,7 +538,7 @@ func TestFleetAutoscalerTLSWebhook(t *testing.T) {
 		MountPath: "/home/service/certs",
 	}}
 	pod, err = framework.KubeClient.CoreV1().Pods(defaultNS).Create(ctx, pod.DeepCopy(), metav1.CreateOptions{})
-	if assert.Nil(t, err) {
+	if assert.NoError(t, err) {
 		defer framework.KubeClient.CoreV1().Pods(defaultNS).Delete(ctx, pod.ObjectMeta.Name, metav1.DeleteOptions{}) // nolint:errcheck
 	} else {
 		// if we could not create the webhook, there is no point going further
@@ -568,10 +556,10 @@ func TestFleetAutoscalerTLSWebhook(t *testing.T) {
 		_, err := framework.KubeClient.CoreV1().Services(defaultNS).Get(ctx, svc.ObjectMeta.Name, metav1.GetOptions{})
 		return k8serrors.IsNotFound(err), nil
 	})
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	svc, err = framework.KubeClient.CoreV1().Services(defaultNS).Create(ctx, svc.DeepCopy(), metav1.CreateOptions{})
-	if assert.Nil(t, err) {
+	if assert.NoError(t, err) {
 		defer framework.KubeClient.CoreV1().Services(defaultNS).Delete(ctx, svc.ObjectMeta.Name, metav1.DeleteOptions{}) // nolint:errcheck
 	} else {
 		// if we could not create the service, there is no point going further
@@ -584,7 +572,7 @@ func TestFleetAutoscalerTLSWebhook(t *testing.T) {
 	initialReplicasCount := int32(1)
 	flt.Spec.Replicas = initialReplicasCount
 	flt, err = fleets.Create(ctx, flt.DeepCopy(), metav1.CreateOptions{})
-	if assert.Nil(t, err) {
+	if assert.NoError(t, err) {
 		defer fleets.Delete(ctx, flt.ObjectMeta.Name, metav1.DeleteOptions{}) // nolint:errcheck
 	}
 
@@ -605,7 +593,7 @@ func TestFleetAutoscalerTLSWebhook(t *testing.T) {
 		CABundle: caPem,
 	}
 	fas, err = fleetautoscalers.Create(ctx, fas.DeepCopy(), metav1.CreateOptions{})
-	if assert.Nil(t, err) {
+	if assert.NoError(t, err) {
 		defer fleetautoscalers.Delete(ctx, fas.ObjectMeta.Name, metav1.DeleteOptions{}) // nolint:errcheck
 	} else {
 		// if we could not create the autoscaler, their is no point going further
@@ -654,7 +642,7 @@ func TestAutoscalerWebhookWithMetadata(t *testing.T) {
 	fixedReplicas := int32(11)
 	flt.Spec.Replicas = initialReplicasCount
 	flt.ObjectMeta.Annotations = map[string]string{
-		"fixedReplicas": fmt.Sprintf("%d", fixedReplicas),
+		"fixedReplicas": strconv.Itoa(int(fixedReplicas)),
 	}
 	flt, err = alpha1.Fleets(framework.Namespace).Create(ctx, flt, metav1.CreateOptions{})
 	require.NoError(t, err)
@@ -2198,6 +2186,7 @@ func TestWasmAutoScaler(t *testing.T) {
 
 // defaultAutoscalerSchedule returns a default scheduled autoscaler for testing.
 func defaultAutoscalerSchedule(t *testing.T, f *agonesv1.Fleet) *autoscalingv1.FleetAutoscaler {
+	t.Helper()
 	return &autoscalingv1.FleetAutoscaler{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      f.ObjectMeta.Name + "-scheduled-autoscaler",
@@ -2239,6 +2228,7 @@ func defaultAutoscalerSchedule(t *testing.T, f *agonesv1.Fleet) *autoscalingv1.F
 
 // defaultAutoscalerChain returns a default chain autoscaler for testing.
 func defaultAutoscalerChain(t *testing.T, f *agonesv1.Fleet) *autoscalingv1.FleetAutoscaler {
+	t.Helper()
 	return &autoscalingv1.FleetAutoscaler{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      f.ObjectMeta.Name + "-chain-autoscaler",
@@ -2343,13 +2333,15 @@ func nextCronMinuteBetween(currentTime time.Time) string {
 
 // Parse a duration string and return a duration struct
 func mustParseDuration(t *testing.T, duration string) time.Duration {
+	t.Helper()
 	d, err := time.ParseDuration(duration)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	return d
 }
 
 // Parse a time string and return a metav1.Time
 func currentTimePlusDuration(t *testing.T, duration string) metav1.Time {
+	t.Helper()
 	d := mustParseDuration(t, duration)
 	currentTimePlusDuration := time.Now().Add(d)
 	return metav1.NewTime(currentTimePlusDuration)
@@ -2359,6 +2351,7 @@ func currentTimePlusDuration(t *testing.T, duration string) metav1.Time {
 // Needs kubectl to be on the file path.
 // May want to replace this with a more robust solution using the Kubernetes client-go library at some point, but since all e2e tests use kubectl, this is a quick solution.
 func copyFileToContainer(t *testing.T, namespace, podName, containerName, srcPath, destPath string) error {
+	t.Helper()
 	cmd := exec.Command("kubectl", "cp", srcPath, fmt.Sprintf("%s/%s:%s", namespace, podName, destPath), "-c", containerName)
 	output, err := cmd.CombinedOutput()
 	if err != nil {

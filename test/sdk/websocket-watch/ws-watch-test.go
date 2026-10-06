@@ -54,12 +54,12 @@ func main() {
 	}
 	response, respErr := httpClient.Do(req)
 	if respErr != nil {
-		log.Fatalf("Could not post reserve request: %v", reqErr) // nolint: gocritic
+		log.Fatalf("Could not post reserve request: %v", respErr) // nolint: gocritic
 	}
 	defer response.Body.Close() // nolint: errcheck
 
 	// Wait for gameserver become Reserved (max 10 seconds)
-	for c := 0; c < 10; c++ {
+	for range 10 {
 		log.Printf("Get GameServer status...util GameServer status become Reserved")
 		req, reqErr = http.NewRequest(http.MethodGet, gameServerURL.String(), nil)
 		if reqErr != nil {

@@ -24,7 +24,7 @@
 #
 
 # base version target. This is usually the next release.
-base_version = 1.61.0
+base_version = 1.62.0
 
 #
 # All of the following can be overwritten with environment variables
@@ -66,7 +66,7 @@ KIND_PROFILE ?= agones
 KIND_CONTAINER_NAME=$(KIND_PROFILE)-control-plane
 
 # Game Server image to use while doing end-to-end tests
-GS_TEST_IMAGE ?= us-docker.pkg.dev/agones-images/examples/simple-game-server:0.43
+GS_TEST_IMAGE ?= us-docker.pkg.dev/agones-images/examples/simple-game-server:0.44
 
 # Enable all beta feature gates. Keep in sync with `true` (beta) entries in pkg/util/runtime/features.go:featureDefaults
 BETA_FEATURE_GATES ?= "CountsAndLists=true&GKEAutopilotExtendedDurationPods=true&ScheduledAutoscaler=true&SidecarContainers=true&FleetAutoscaleRequestMetaData=true"
@@ -306,9 +306,10 @@ push-release-chart: $(ensure-build-image)
 test: $(ensure-build-image) test-go test-sdks test-install-yaml site-test helm-lint test-build-scripts
 
 # Run go tests
+# sdks/go/... (not sdks/...) avoids go test racing the concurrent cargo build's transient sdks/rust/target/ dirs.
 test-go: $(ensure-build-image)
 	$(GO_TEST) $(agones_package)/pkg/... \
-	    $(agones_package)/sdks/... $(agones_package)/cmd/...
+	    $(agones_package)/sdks/go/... $(agones_package)/cmd/...
 
 # Run unit tests for all build scripts. Run script tests that have their own Go module separately.
 test-build-scripts: $(ensure-build-image)
@@ -452,7 +453,8 @@ install: $(ensure-build-image) install-custom-pull-secret
 			helm uninstall agones --namespace=agones-system --wait --timeout=20m; \
 		fi || true'
 	$(DOCKER_RUN) \
-		helm upgrade --install --atomic --wait --timeout 10m --namespace=agones-system \
+		helm upgrade --install --rollback-on-failure --wait --timeout 10m --namespace=agones-system \
+		--server-side=false \
 		--create-namespace \
 		--set agones.image.tag=$(VERSION),agones.image.registry=$(REGISTRY) \
 		--set agones.image.controller.pullPolicy=$(IMAGE_PULL_POLICY),agones.image.controller.pullSecret=$(IMAGE_PULL_SECRET) \

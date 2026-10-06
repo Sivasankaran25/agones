@@ -32,8 +32,8 @@ import (
 	pb "agones.dev/agones/pkg/allocation/go"
 	agonesv1 "agones.dev/agones/pkg/apis/agones/v1"
 	multiclusterv1 "agones.dev/agones/pkg/apis/multicluster/v1"
+	"agones.dev/agones/pkg/util/errors"
 	e2e "agones.dev/agones/test/e2e/framework"
-	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -45,6 +45,8 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/wait"
 )
+
+var errs = errors.FromPackage()
 
 const (
 	agonesSystemNamespace          = "agones-system"
@@ -75,6 +77,7 @@ const (
 
 // CopyDefaultAllocatorClientSecret copys the allocator client secret
 func CopyDefaultAllocatorClientSecret(ctx context.Context, t *testing.T, toNamespace string, framework *e2e.Framework) {
+	t.Helper()
 	kubeCore := framework.KubeClient.CoreV1()
 	clientSecret, err := kubeCore.Secrets(allocatorClientSecretNamespace).Get(ctx, allocatorClientSecretName, metav1.GetOptions{})
 	if err != nil {
@@ -83,7 +86,7 @@ func CopyDefaultAllocatorClientSecret(ctx context.Context, t *testing.T, toNames
 	clientSecret.ObjectMeta.Namespace = toNamespace
 	clientSecret.ResourceVersion = ""
 	_, err = kubeCore.Secrets(toNamespace).Create(ctx, clientSecret, metav1.CreateOptions{})
-	if err != nil {
+	if err != nil && !k8serrors.IsAlreadyExists(err) {
 		t.Fatalf("Could not copy default allocator client %s/%s secret to namespace %s: %v", allocatorClientSecretNamespace, allocatorClientSecretName, toNamespace, err)
 	}
 }
@@ -102,15 +105,16 @@ func CreateAllocationPolicy(ctx context.Context, t *testing.T, framework *e2e.Fr
 
 // GetAllocatorEndpoint gets the allocator LB endpoint
 func GetAllocatorEndpoint(ctx context.Context, t *testing.T, framework *e2e.Framework) (string, int32) {
+	t.Helper()
 	kubeCore := framework.KubeClient.CoreV1()
 	svc, err := kubeCore.Services(agonesSystemNamespace).Get(ctx, allocatorServiceName, metav1.GetOptions{})
-	if !assert.Nil(t, err) {
+	if !assert.NoError(t, err) {
 		t.FailNow()
 	}
 	if !assert.NotNil(t, svc.Status.LoadBalancer) {
 		t.FailNow()
 	}
-	if !assert.Equal(t, 1, len(svc.Status.LoadBalancer.Ingress)) {
+	if !assert.Len(t, svc.Status.LoadBalancer.Ingress, 1) {
 		t.FailNow()
 	}
 	if !assert.NotNil(t, 0, svc.Status.LoadBalancer.Ingress[0].IP) {
@@ -148,14 +152,14 @@ func GetTLSConfig(ctx context.Context, namespace, clientSecretName string, tlsCA
 	kubeCore := framework.KubeClient.CoreV1()
 	clientSecret, err := kubeCore.Secrets(namespace).Get(ctx, clientSecretName, metav1.GetOptions{})
 	if err != nil {
-		return nil, errors.Errorf("getting client secret %s/%s failed: %s", namespace, clientSecretName, err)
+		return nil, errs.Errorf("getting client secret %s/%s failed: %s", namespace, clientSecretName, err)
 	}
 
 	// Create http client using cert
 	clientCert := clientSecret.Data[tlsCrtTag]
 	clientKey := clientSecret.Data[tlsKeyTag]
 	if clientCert == nil || clientKey == nil {
-		return nil, errors.New("missing certificate")
+		return nil, errs.New("missing certificate")
 	}
 
 	// Load client cert
@@ -166,7 +170,7 @@ func GetTLSConfig(ctx context.Context, namespace, clientSecretName string, tlsCA
 
 	rootCA := x509.NewCertPool()
 	if !rootCA.AppendCertsFromPEM(tlsCA) {
-		return nil, errors.New("could not append PEM format CA cert")
+		return nil, errs.New("could not append PEM format CA cert")
 	}
 
 	return &tls.Config{
@@ -276,7 +280,7 @@ func ValidateAllocatorResponse(t *testing.T, resp *pb.AllocationResponse) {
 	if !assert.NotNil(t, resp) {
 		return
 	}
-	assert.Greater(t, len(resp.Ports), 0)
+	assert.NotEmpty(t, resp.Ports)
 	assert.NotEmpty(t, resp.GameServerName)
 	assert.NotEmpty(t, resp.Address)
 	assert.NotEmpty(t, resp.Addresses)
@@ -297,13 +301,14 @@ func DeleteAgonesPod(ctx context.Context, podName string, namespace string, fram
 // a client that has at least once successfully allocated from a fleet. The fleet used to test
 // the client is leaked.
 func GetAllocatorClient(ctx context.Context, t *testing.T, framework *e2e.Framework) (pb.AllocationServiceClient, error) {
+	t.Helper()
 	logger := e2e.TestLogger(t)
 	ip, port := GetAllocatorEndpoint(ctx, t, framework)
 	requestURL := fmt.Sprintf(allocatorReqURLFmt, ip, port)
 	tlsCA := RefreshAllocatorTLSCerts(ctx, t, ip, framework)
 
 	flt, err := CreateFleet(ctx, framework.Namespace, framework)
-	if !assert.Nil(t, err) {
+	if !assert.NoError(t, err) {
 		return nil, err
 	}
 	framework.AssertFleetCondition(t, flt, e2e.FleetReadyCount(flt.Spec.Replicas))
@@ -366,14 +371,13 @@ func CleanupNamespaces(ctx context.Context, framework *e2e.Framework) error {
 	// loop through them, and delete them
 	for _, ns := range list.Items {
 		if err := framework.DeleteNamespace(ns.ObjectMeta.Name); err != nil {
-			cause := errors.Cause(err)
-			if k8serrors.IsConflict(cause) {
-				logrus.WithError(cause).Warn("namespace already being deleted")
+			if k8serrors.IsConflict(err) {
+				logrus.WithError(err).Warn("namespace already being deleted")
 				continue
 			}
 			// here just in case we need to catch other errors
-			logrus.WithField("reason", k8serrors.ReasonForError(cause)).Info("cause for namespace deletion error")
-			return cause
+			logrus.WithField("reason", k8serrors.ReasonForError(err)).Info("cause for namespace deletion error")
+			return err
 		}
 	}
 

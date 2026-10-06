@@ -21,7 +21,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/pkg/errors"
+	"agones.dev/agones/pkg/util/errors"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -29,6 +29,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	typedv1 "k8s.io/client-go/kubernetes/typed/core/v1"
 )
+
+var errs = errors.FromPackage()
 
 func TestPingHTTP(t *testing.T) {
 	t.Parallel()
@@ -67,7 +69,7 @@ func externalPort(svc *corev1.Service, port corev1.ServicePort) (int32, error) {
 		return port.Port, nil
 	}
 
-	return 0, errors.New("could not find external port")
+	return 0, errs.New("could not find external port")
 }
 
 func TestPingUDP(t *testing.T) {
@@ -95,6 +97,7 @@ func TestPingUDP(t *testing.T) {
 }
 
 func externalIP(t *testing.T, kubeCore typedv1.NodesGetter, svc *corev1.Service) (string, error) {
+	t.Helper()
 	externalIP := ""
 	ctx := context.Background()
 
@@ -103,7 +106,7 @@ func externalIP(t *testing.T, kubeCore typedv1.NodesGetter, svc *corev1.Service)
 	// likely this is minikube, so go get the node ip
 	if svc.Spec.Type == corev1.ServiceTypeNodePort {
 		nodes, err := kubeCore.Nodes().List(ctx, metav1.ListOptions{})
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 		assert.Len(t, nodes.Items, 1, "Should only be 1 node on minikube")
 
 		addresses := nodes.Items[0].Status.Addresses
@@ -118,7 +121,7 @@ func externalIP(t *testing.T, kubeCore typedv1.NodesGetter, svc *corev1.Service)
 
 	var err error
 	if externalIP == "" {
-		err = errors.New("could not find external ip")
+		err = errs.New("could not find external ip")
 	}
 	return externalIP, err
 }

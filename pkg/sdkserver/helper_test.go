@@ -29,6 +29,7 @@ import (
 )
 
 func testHTTPHealth(t *testing.T, url string, expectedResponse string, expectedStatus int) {
+	t.Helper()
 	// do a poll, because this code could run before the health check becomes live
 	err := wait.PollUntilContextTimeout(context.Background(), time.Second, 20*time.Second, true, func(_ context.Context) (done bool, err error) {
 		resp, err := http.Get(url)
@@ -41,14 +42,14 @@ func testHTTPHealth(t *testing.T, url string, expectedResponse string, expectedS
 		if resp != nil {
 			defer resp.Body.Close() // nolint: errcheck
 			body, err := io.ReadAll(resp.Body)
-			assert.Nil(t, err, "(%s) read response error should be nil: %v", url, err)
+			assert.NoError(t, err, "(%s) read response error should be nil: %v", url, err)
 			assert.Equal(t, expectedStatus, resp.StatusCode, "url: %s", url)
 			assert.Equal(t, []byte(expectedResponse), body, "(%s) response body should be '%s'", url, expectedResponse)
 		}
 
 		return true, nil
 	})
-	assert.Nil(t, err, "Timeout on %s health check, %v", url, err)
+	assert.NoError(t, err, "Timeout on %s health check, %v", url, err)
 }
 
 // emptyMockStream is the mock of the SDK_HealthServer for streaming
@@ -88,11 +89,11 @@ func (m *emptyMockStream) Context() context.Context {
 	panic("implement me")
 }
 
-func (m *emptyMockStream) SendMsg(_ interface{}) error {
+func (m *emptyMockStream) SendMsg(_ any) error {
 	panic("implement me")
 }
 
-func (m *emptyMockStream) RecvMsg(_ interface{}) error {
+func (m *emptyMockStream) RecvMsg(_ any) error {
 	panic("implement me")
 }
 
@@ -130,10 +131,10 @@ func (m *gameServerMockStream) Context() context.Context {
 	return m.ctx
 }
 
-func (*gameServerMockStream) SendMsg(_ interface{}) error {
+func (*gameServerMockStream) SendMsg(_ any) error {
 	panic("implement me")
 }
 
-func (*gameServerMockStream) RecvMsg(_ interface{}) error {
+func (*gameServerMockStream) RecvMsg(_ any) error {
 	panic("implement me")
 }

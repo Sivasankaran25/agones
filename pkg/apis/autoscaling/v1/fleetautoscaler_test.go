@@ -71,7 +71,7 @@ func TestFleetAutoscalerValidateUpdate(t *testing.T) {
 		fas.Spec.Policy.Buffer.BufferSize = intstr.FromString("20%")
 		causes := fas.Validate()
 
-		assert.Len(t, causes, 0)
+		assert.Empty(t, causes)
 	})
 
 	t.Run("bufferSize bad percent", func(t *testing.T) {
@@ -132,7 +132,7 @@ func TestFleetAutoscalerWebhookValidateUpdate(t *testing.T) {
 		fas := webhookFixture()
 		causes := fas.Validate()
 
-		assert.Len(t, causes, 0)
+		assert.Empty(t, causes)
 	})
 
 	t.Run("good url value", func(t *testing.T) {
@@ -142,7 +142,7 @@ func TestFleetAutoscalerWebhookValidateUpdate(t *testing.T) {
 		fas.Spec.Policy.Webhook.Service = nil
 		causes := fas.Validate()
 
-		assert.Len(t, causes, 0)
+		assert.Empty(t, causes)
 	})
 
 	t.Run("bad URL and service value", func(t *testing.T) {
@@ -176,7 +176,7 @@ func TestFleetAutoscalerWebhookValidateUpdate(t *testing.T) {
 		fas.Spec.Policy.Webhook.CABundle = []byte(goodCaBundle)
 
 		causes := fas.Validate()
-		assert.Len(t, causes, 0)
+		assert.Empty(t, causes)
 	})
 
 	t.Run("https url and invalid CABundle value", func(t *testing.T) {
@@ -199,7 +199,7 @@ func TestFleetAutoscalerWebhookValidateUpdate(t *testing.T) {
 		fas.Spec.Policy.Webhook.CABundle = nil
 
 		causes := fas.Validate()
-		assert.Len(t, causes, 0)
+		assert.Empty(t, causes)
 	})
 
 	t.Run("bad url value", func(t *testing.T) {
@@ -232,12 +232,6 @@ func TestFleetAutoscalerCounterValidateUpdate(t *testing.T) {
 		wantLength   int
 		wantField    string
 	}{
-		"feature gate not turned on": {
-			fas:          counterFixture(),
-			featureFlags: string(runtime.FeatureCountsAndLists) + "=false",
-			wantLength:   1,
-			wantField:    "spec.policy.counter",
-		},
 		"nil parameters": {
 			fas: modifiedFAS(func(fap *FleetAutoscalerPolicy) {
 				fap.Counter = nil
@@ -282,7 +276,7 @@ func TestFleetAutoscalerCounterValidateUpdate(t *testing.T) {
 			fas: modifiedFAS(func(fap *FleetAutoscalerPolicy) {
 				fap.Counter.BufferSize.Type = intstr.String
 				fap.Counter.BufferSize = intstr.FromString("99%")
-				fap.Counter.MinCapacity = 10
+				fap.Counter.MinCapacity = 1
 			}),
 			featureFlags: string(runtime.FeatureCountsAndLists) + "=true",
 			wantLength:   0,
@@ -310,12 +304,15 @@ func TestFleetAutoscalerCounterValidateUpdate(t *testing.T) {
 			fas: modifiedFAS(func(fap *FleetAutoscalerPolicy) {
 				fap.Counter.BufferSize.Type = intstr.String
 				fap.Counter.BufferSize = intstr.FromString("100%")
-				fap.Counter.MinCapacity = 10
+				fap.Counter.MinCapacity = 1
 			}),
 			featureFlags: string(runtime.FeatureCountsAndLists) + "=true",
 			wantLength:   1,
 			wantField:    "spec.policy.counter.bufferSize",
 		},
+		// "feature gate not turned on" case REMOVED — CountsAndLists is now
+		// unconditionally enabled (graduated to Stable in #4590 PR1), so
+		// there is no longer a gate-off rejection path to test.
 	}
 
 	runtime.FeatureTestMutex.Lock()
@@ -352,12 +349,6 @@ func TestFleetAutoscalerListValidateUpdate(t *testing.T) {
 		wantLength   int
 		wantField    string
 	}{
-		"feature gate not turned on": {
-			fas:          listFixture(),
-			featureFlags: string(runtime.FeatureCountsAndLists) + "=false",
-			wantLength:   1,
-			wantField:    "spec.policy.list",
-		},
 		"nil parameters": {
 			fas: modifiedFAS(func(fap *FleetAutoscalerPolicy) {
 				fap.List = nil
@@ -436,6 +427,9 @@ func TestFleetAutoscalerListValidateUpdate(t *testing.T) {
 			wantLength:   1,
 			wantField:    "spec.policy.list.bufferSize",
 		},
+		// "feature gate not turned on" case REMOVED — CountsAndLists is now
+		// unconditionally enabled (graduated to Stable in #4590 PR1), so
+		// there is no longer a gate-off rejection path to test.
 	}
 
 	runtime.FeatureTestMutex.Lock()

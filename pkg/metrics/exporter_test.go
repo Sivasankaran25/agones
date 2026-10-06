@@ -20,7 +20,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -115,8 +114,7 @@ func TestMetrics_Endpoint_ExposesAllMetrics(t *testing.T) {
 	assert.NotNil(t, health, "Health check handler should not be nil")
 	server.Handle("/", health)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	// Start the HTTP server
 	go func() {
@@ -143,9 +141,9 @@ func TestMetrics_Endpoint_ExposesAllMetrics(t *testing.T) {
 
 func TestSetupMetrics_StackdriverOnly_NoPanic(t *testing.T) {
 	// Set required env vars
-	require.NoError(t, os.Setenv("POD_NAMESPACE", "default"))
-	require.NoError(t, os.Setenv("POD_NAME", "test-pod"))
-	require.NoError(t, os.Setenv("CONTAINER_NAME", "test-container"))
+	t.Setenv("POD_NAMESPACE", "default")
+	t.Setenv("POD_NAME", "test-pod")
+	t.Setenv("CONTAINER_NAME", "test-container")
 
 	// Fake metadata server
 	handler := http.NewServeMux()
@@ -162,7 +160,7 @@ func TestSetupMetrics_StackdriverOnly_NoPanic(t *testing.T) {
 
 	// Set env var to point to the fake metadata server
 	host := strings.TrimPrefix(fakeMetadataServer.URL, "http://")
-	require.NoError(t, os.Setenv("GCE_METADATA_HOST", host))
+	t.Setenv("GCE_METADATA_HOST", host)
 
 	// Config for Stackdriver metrics
 	conf := Config{
@@ -201,6 +199,7 @@ func newMockWithReactorNodesAndGameServers() agtesting.Mocks {
 }
 
 func setupGameServer(t *testing.T, ctrl *fakeController) {
+	t.Helper()
 	gs := gameServerWithFleetAndState("test-fleet", agonesv1.GameServerStateCreating)
 	ctrl.gsWatch.Add(gs)
 
@@ -255,6 +254,7 @@ func setupFleetWithCountersAndLists(_ *testing.T, ctrl *fakeController) {
 }
 
 func setupGameServerPlayerConnect(t *testing.T, ctrl *fakeController) {
+	t.Helper()
 	gs := gameServerWithFleetAndState("test-fleet", agonesv1.GameServerStateReady)
 	gs.Status.Players = &agonesv1.PlayerStatus{
 		Count: 0,
@@ -276,6 +276,7 @@ func setupGameServerPlayerConnect(t *testing.T, ctrl *fakeController) {
 }
 
 func setupGameServerAllocation(t *testing.T, ctrl *fakeController) {
+	t.Helper()
 	gs := gameServerWithFleetAndState("test-fleet", agonesv1.GameServerStateCreating)
 	ctrl.gsWatch.Add(gs)
 	gs = gs.DeepCopy()
@@ -285,7 +286,7 @@ func setupGameServerAllocation(t *testing.T, ctrl *fakeController) {
 	require.EventuallyWithT(t, func(collect *assert.CollectT) {
 		gs, err := ctrl.gameServerLister.GameServers(gs.ObjectMeta.Namespace).Get(gs.ObjectMeta.Name)
 		require.NoError(collect, err)
-		assert.Equal(collect, gs.Status.State, agonesv1.GameServerStateAllocated)
+		assert.Equal(collect, agonesv1.GameServerStateAllocated, gs.Status.State)
 	}, 5*time.Second, time.Second)
 	ctrl.collect()
 }

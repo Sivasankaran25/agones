@@ -17,18 +17,23 @@ package https
 import (
 	"context"
 	cryptotls "crypto/tls"
+	stderrors "errors"
 	"net/http"
 	"sync"
 	"time"
 
+	"agones.dev/agones/pkg/util/errors"
 	"agones.dev/agones/pkg/util/fswatch"
 	"agones.dev/agones/pkg/util/runtime"
-	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 )
 
 const (
 	tlsDir = "/certs/"
+
+	// readHeaderTimeout bounds how long a client may take to send its request
+	// headers, so a Slowloris client cannot hold the listener open indefinitely.
+	readHeaderTimeout = 60 * time.Second
 )
 
 // tls is a http server interface to enable easier testing
@@ -49,6 +54,7 @@ type certServer struct {
 type Server struct {
 	certServer certServer
 	logger     *logrus.Entry
+	errs       *errors.Errors
 	Mux        *http.ServeMux
 	tls        tls
 	certFile   string
@@ -67,6 +73,7 @@ func NewServer(certFile, keyFile string, port string) *Server {
 		port:     port,
 	}
 	wh.logger = runtime.NewLoggerWithType(wh)
+	wh.errs = errors.FromStruct(wh)
 	wh.setupServer()
 	wh.Mux.HandleFunc("/", wh.defaultHandler)
 
@@ -80,6 +87,7 @@ func (s *Server) setupServer() {
 		TLSConfig: &cryptotls.Config{
 			GetCertificate: s.getCertificate,
 		},
+		ReadHeaderTimeout: readHeaderTimeout,
 	}
 
 	tlsCert, err := cryptotls.LoadX509KeyPair(tlsDir+"server.crt", tlsDir+"server.key")
@@ -126,6 +134,10 @@ func (s *Server) WatchForCertificateChanges() (func(), error) {
 // Run runs the webhook server, starting a https listener.
 // Will close the http server on stop channel close.
 func (s *Server) Run(ctx context.Context, _ int) error {
+	// context.Background() rather than ctx: ctx is already cancelled by the time
+	// the goroutine wakes, and Shutdown treats a done context as "stop waiting
+	// for in-flight requests and close now", defeating the graceful drain.
+	//nolint:gosec // G118: deliberate, see above.
 	go func() {
 		<-ctx.Done()
 		_ = s.tls.Shutdown(context.Background())
@@ -134,12 +146,12 @@ func (s *Server) Run(ctx context.Context, _ int) error {
 	s.logger.WithField("server", s).Infof("https server started on port :%s", s.port)
 
 	err := s.tls.ListenAndServeTLS(s.certFile, s.keyFile)
-	if err == http.ErrServerClosed {
+	if stderrors.Is(err, http.ErrServerClosed) {
 		s.logger.WithError(err).Info("https server closed")
 		return nil
 	}
 
-	return errors.Wrap(err, "Could not listen on :"+s.port)
+	return s.errs.Wrap(err, "Could not listen on :"+s.port)
 }
 
 // defaultHandler Handles all the HTTP requests

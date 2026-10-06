@@ -82,9 +82,10 @@ func (c *fakeController) close() {
 }
 
 func (c *fakeController) run(t *testing.T) {
+	t.Helper()
 	go func() {
 		err := c.Controller.Run(c.ctx, 1)
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 	}()
 	c.sync()
 }
@@ -147,7 +148,7 @@ func gameServerWithFleetAndState(fleetName string, state agonesv1.GameServerStat
 }
 
 func generateGsEvents(count int, state agonesv1.GameServerState, fleetName string, fakew *watch.FakeWatcher) {
-	for i := 0; i < count; i++ {
+	for range count {
 		gs := gameServerWithFleetAndState(fleetName, agonesv1.GameServerState(""))
 		fakew.Add(gs)
 		gsUpdated := gs.DeepCopy()

@@ -15,7 +15,6 @@
 package portallocator
 
 import (
-	"fmt"
 	"strconv"
 	"sync"
 	"testing"
@@ -174,10 +173,10 @@ func TestPortRangeAllocatorAllocate(t *testing.T) {
 		// no port
 		gsCopy = fixture.DeepCopy()
 		gsCopy.Spec.Ports = nil
-		assert.Len(t, gsCopy.Spec.Ports, 0)
+		assert.Empty(t, gsCopy.Spec.Ports)
 		pa.Allocate(gsCopy)
 		assert.Nil(t, gsCopy.Spec.Ports)
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 		assert.Equal(t, 12, countTotalAllocatedPorts(pa))
 	})
 
@@ -199,8 +198,8 @@ func TestPortRangeAllocatorAllocate(t *testing.T) {
 		require.NoError(t, err)
 
 		// two nodes
-		for x := 0; x < 2; x++ {
-			for i := 0; i < 11; i++ {
+		for range 2 {
+			for range 11 {
 				var p int32
 				gs := pa.Allocate(fixture.DeepCopy())
 				require.NotNil(t, gs)
@@ -241,8 +240,8 @@ func TestPortRangeAllocatorAllocate(t *testing.T) {
 		require.NoError(t, err)
 
 		// two nodes
-		for x := 0; x < 2; x++ {
-			for i := 0; i < 3; i++ {
+		for x := range 2 {
+			for i := range 3 {
 				gsCopy := morePortFixture.DeepCopy()
 				gsCopy.ObjectMeta.UID = types.UID(strconv.Itoa(x) + ":" + strconv.Itoa(i))
 				gs := pa.Allocate(gsCopy)
@@ -391,13 +390,15 @@ func TestPortRangeAllocatorMultithreadAllocate(t *testing.T) {
 
 	// do this for more than the nodes that are pre-allocated, to make sure
 	// it works for dynamic node addition
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		wg.Add(1)
 		go func(i int) {
-			for x := 0; x < 10; x++ {
+			for x := range 10 {
 				logrus.WithField("x", x).WithField("i", i).Info("allocating!")
 				gs := pa.Allocate(fixture.DeepCopy())
-				require.NotNil(t, gs)
+				if !assert.NotNil(t, gs) {
+					continue
+				}
 				for _, p := range gs.Spec.Ports {
 					assert.NotEmpty(t, p.HostPort)
 				}
@@ -447,7 +448,7 @@ func TestPortRangeAllocatorDeAllocate(t *testing.T) {
 
 		pa.DeAllocate(gs)
 		assert.Equal(t, 0, countAllocatedPorts(pa, port.HostPort))
-		assert.Len(t, pa.gameServerRegistry, 0)
+		assert.Empty(t, pa.gameServerRegistry)
 	}
 }
 
@@ -653,7 +654,7 @@ func TestTakePortAllocation(t *testing.T) {
 	for i, row := range fixture {
 		for p, taken := range row {
 			if i != 0 && p != 2 {
-				assert.False(t, taken, fmt.Sprintf("row %d and port %d should be false", i, p))
+				assert.False(t, taken, "row %d and port %d should be false", i, p)
 			}
 		}
 	}

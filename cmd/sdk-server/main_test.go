@@ -16,7 +16,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -33,8 +32,7 @@ func TestRegisterTestSdkServer(t *testing.T) {
 	grpcServer := grpc.NewServer()
 	_, err := registerTestSdkServer(grpcServer, ctlConf)
 	assert.NoError(t, err)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	ctx.Done()
 	ctlConf.LocalFile = "@@"
 	_, err = registerLocal(grpcServer, ctlConf)
@@ -59,7 +57,7 @@ func TestHealthCheckWrapper(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			testResponse := httptest.NewRecorder()
-			testWrapper.ServeHTTP(testResponse, httptest.NewRequest("POST", "http://testServer/health", tc.body))
+			testWrapper.ServeHTTP(testResponse, httptest.NewRequest(http.MethodPost, "http://testServer/health", tc.body))
 			assert.Equal(t, tc.expected, testResponse.Code)
 		})
 	}

@@ -22,10 +22,10 @@ import (
 	"time"
 
 	"agones.dev/agones/pkg"
+	"agones.dev/agones/pkg/util/errors"
 	"agones.dev/agones/pkg/util/runtime"
 	"agones.dev/agones/pkg/util/signals"
 	"github.com/heptiolabs/healthcheck"
-	"github.com/pkg/errors"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 	"golang.org/x/time/rate"
@@ -34,10 +34,15 @@ import (
 const (
 	httpResponseFlag = "http-response"
 	udpRateLimitFlag = "udp-rate-limit"
+
+	// readHeaderTimeout bounds how long a client may take to send its request
+	// headers, so a Slowloris client cannot hold the listener open indefinitely.
+	readHeaderTimeout = 60 * time.Second
 )
 
 var (
 	logger = runtime.NewLoggerWithSource("main")
+	errs   = errors.FromPackage()
 )
 
 func main() {
@@ -75,8 +80,9 @@ func serveHTTP(ctlConf config, h healthcheck.Handler) func() {
 	// we don't need a health checker, we already have a http endpoint that returns 200
 	mux := http.NewServeMux()
 	srv := &http.Server{
-		Addr:    ":8080",
-		Handler: mux,
+		Addr:              ":8080",
+		Handler:           mux,
+		ReadHeaderTimeout: readHeaderTimeout,
 	}
 
 	// add health check as well
@@ -116,7 +122,7 @@ type config struct {
 // validate returns an error if there is a validation problem
 func (c *config) validate() error {
 	if c.UDPRateLimit < 0 {
-		return errors.New("UDP Rate limit must be greater that or equal to zero")
+		return errs.New("UDP Rate limit must be greater that or equal to zero")
 	}
 
 	return nil

@@ -17,6 +17,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	stderrors "errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -36,9 +37,9 @@ import (
 	"agones.dev/agones/pkg/gameserverallocations/processor"
 	"agones.dev/agones/pkg/gameservers"
 	"agones.dev/agones/pkg/metrics"
+	"agones.dev/agones/pkg/util/errors"
 	"agones.dev/agones/pkg/util/fswatch"
 	"github.com/heptiolabs/healthcheck"
-	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
@@ -65,11 +66,18 @@ import (
 var (
 	podReady bool
 	logger   = runtime.NewLoggerWithSource("main")
+	errs     = errors.FromPackage()
 )
 
 const (
 	certDir = "/home/allocator/client-ca/"
 	tlsDir  = "/home/allocator/tls/"
+
+	// readHeaderTimeout bounds how long a client may take to send its request
+	// headers. Without it a handful of connections trickling headers one byte
+	// at a time can hold the listener open indefinitely (Slowloris). It caps
+	// the headers only, so streaming request bodies are unaffected.
+	readHeaderTimeout = 60 * time.Second
 )
 
 const (
@@ -87,6 +95,7 @@ const (
 	apiServerBurstQPSFlag            = "api-server-qps-burst"
 	logLevelFlag                     = "log-level"
 	allocationBatchWaitTime          = "allocation-batch-wait-time"
+	maxListItemsFlag                 = "max-list-items"
 	readinessShutdownDuration        = "readiness-shutdown-duration"
 	httpUnallocatedStatusCode        = "http-unallocated-status-code"
 	processorGRPCAddress             = "processor-grpc-address"
@@ -109,6 +118,7 @@ func parseEnvFlags() config {
 	viper.SetDefault(totalRemoteAllocationTimeoutFlag, 30*time.Second)
 	viper.SetDefault(logLevelFlag, "Info")
 	viper.SetDefault(allocationBatchWaitTime, 500*time.Millisecond)
+	viper.SetDefault(maxListItemsFlag, 1000)
 	viper.SetDefault(httpUnallocatedStatusCode, http.StatusTooManyRequests)
 	viper.SetDefault(processorGRPCAddress, "agones-processor.agones-system.svc.cluster.local")
 	viper.SetDefault(processorGRPCPort, 9090)
@@ -128,6 +138,7 @@ func parseEnvFlags() config {
 	pflag.Duration(totalRemoteAllocationTimeoutFlag, viper.GetDuration(totalRemoteAllocationTimeoutFlag), "Flag to set total remote allocation timeout including retries.")
 	pflag.String(logLevelFlag, viper.GetString(logLevelFlag), "Agones Log level")
 	pflag.Duration(allocationBatchWaitTime, viper.GetDuration(allocationBatchWaitTime), "Flag to configure the waiting period between allocations batches")
+	pflag.Int64(maxListItemsFlag, viper.GetInt64(maxListItemsFlag), "Flag to set the maximum Capacity a GameServer List may be set to during allocation. Can also use MAX_LIST_ITEMS env variable")
 	pflag.Duration(readinessShutdownDuration, viper.GetDuration(readinessShutdownDuration), "Time in seconds for SIGTERM/SIGINT handler to sleep for.")
 	pflag.Int32(httpUnallocatedStatusCode, viper.GetInt32(httpUnallocatedStatusCode), "HTTP status code to return when no GameServer is available")
 	pflag.String(processorGRPCAddress, viper.GetString(processorGRPCAddress), "The gRPC address of the Agones Processor service")
@@ -152,6 +163,7 @@ func parseEnvFlags() config {
 	runtime.Must(viper.BindEnv(totalRemoteAllocationTimeoutFlag))
 	runtime.Must(viper.BindEnv(logLevelFlag))
 	runtime.Must(viper.BindEnv(allocationBatchWaitTime))
+	runtime.Must(viper.BindEnv(maxListItemsFlag))
 	runtime.Must(viper.BindEnv(readinessShutdownDuration))
 	runtime.Must(viper.BindEnv(httpUnallocatedStatusCode))
 	runtime.Must(viper.BindPFlags(pflag.CommandLine))
@@ -174,6 +186,7 @@ func parseEnvFlags() config {
 		remoteAllocationTimeout:      viper.GetDuration(remoteAllocationTimeoutFlag),
 		totalRemoteAllocationTimeout: viper.GetDuration(totalRemoteAllocationTimeoutFlag),
 		allocationBatchWaitTime:      viper.GetDuration(allocationBatchWaitTime),
+		maxListItems:                 viper.GetInt64(maxListItemsFlag),
 		ReadinessShutdownDuration:    viper.GetDuration(readinessShutdownDuration),
 		httpUnallocatedStatusCode:    int(viper.GetInt32(httpUnallocatedStatusCode)),
 		processorGRPCAddress:         viper.GetString(processorGRPCAddress),
@@ -197,6 +210,7 @@ type config struct {
 	totalRemoteAllocationTimeout time.Duration
 	remoteAllocationTimeout      time.Duration
 	allocationBatchWaitTime      time.Duration
+	maxListItems                 int64
 	ReadinessShutdownDuration    time.Duration
 	httpUnallocatedStatusCode    int
 	processorGRPCAddress         string
@@ -223,6 +237,10 @@ func main() {
 	logger.WithField("version", pkg.Version).WithField("ctlConf", conf).
 		WithField("featureGates", runtime.EncodeFeatures()).
 		Info("Starting agones-allocator")
+
+	if conf.maxListItems <= 0 {
+		logger.Fatalf("%s must be greater than 0", maxListItemsFlag)
+	}
 
 	logger.WithField("logLevel", conf.LogLevel).Info("Setting LogLevel configuration")
 	level, err := logrus.ParseLevel(strings.ToLower(conf.LogLevel))
@@ -264,7 +282,7 @@ func main() {
 	grpcHealth := grpchealth.NewServer() // only used for gRPC, ignored o/w
 	health.AddReadinessCheck("allocator-agones-client", func() error {
 		if !podReady {
-			return errors.New("asked to shut down, failed readiness check")
+			return errs.New("asked to shut down, failed readiness check")
 		}
 		_, err := agonesClient.ServerVersion()
 		if err != nil {
@@ -310,7 +328,7 @@ func main() {
 		h = newProcessorServiceHandler(processorClient, conf.MTLSDisabled, conf.TLSDisabled)
 	} else {
 		grpcUnallocatedStatusCode := processor.GRPCCodeFromHTTPStatus(conf.httpUnallocatedStatusCode)
-		h = newServiceHandler(workerCtx, kubeClient, agonesClient, health, conf.MTLSDisabled, conf.TLSDisabled, conf.remoteAllocationTimeout, conf.totalRemoteAllocationTimeout, conf.allocationBatchWaitTime, grpcUnallocatedStatusCode)
+		h = newServiceHandler(workerCtx, kubeClient, agonesClient, health, conf.MTLSDisabled, conf.TLSDisabled, conf.remoteAllocationTimeout, conf.totalRemoteAllocationTimeout, conf.allocationBatchWaitTime, grpcUnallocatedStatusCode, conf.maxListItems)
 	}
 
 	if !h.tlsDisabled {
@@ -413,13 +431,15 @@ func runHTTP(listenCtx context.Context, workerCtx context.Context, h *serviceHan
 	if !h.mTLSDisabled {
 		cfg.ClientAuth = tls.RequireAnyClientCert
 		cfg.VerifyPeerCertificate = h.verifyClientCertificate
+		cfg.VerifyConnection = h.verifyClientConnection
 	}
 
 	// Create a Server instance to listen on the http port with the TLS config.
 	server := &http.Server{
-		Addr:      fmt.Sprintf(":%d", httpPort),
-		TLSConfig: cfg,
-		Handler:   handler,
+		Addr:              fmt.Sprintf(":%d", httpPort),
+		TLSConfig:         cfg,
+		Handler:           handler,
+		ReadHeaderTimeout: readHeaderTimeout,
 	}
 
 	go func() {
@@ -435,7 +455,7 @@ func runHTTP(listenCtx context.Context, workerCtx context.Context, h *serviceHan
 			err = server.ListenAndServe()
 		}
 
-		if err == http.ErrServerClosed {
+		if stderrors.Is(err, http.ErrServerClosed) {
 			logger.WithError(err).Info("HTTP/HTTPS server closed")
 			os.Exit(0)
 		}
@@ -447,7 +467,7 @@ func runHTTP(listenCtx context.Context, workerCtx context.Context, h *serviceHan
 
 func runGRPC(ctx context.Context, h *serviceHandler, grpcHealth *grpchealth.Server, grpcPort int) {
 	logger.WithField("port", grpcPort).Info("Running the grpc handler on port")
-	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", grpcPort))
+	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", fmt.Sprintf(":%d", grpcPort))
 	if err != nil {
 		logger.WithError(err).Fatalf("failed to listen on TCP port %d", grpcPort)
 		os.Exit(1)
@@ -480,6 +500,7 @@ func newProcessorServiceHandler(processorClient processor.Client, mTLSDisabled, 
 		tlsDisabled:     tlsDisabled,
 		processorClient: processorClient,
 	}
+	h.errs = errors.FromStruct(&h)
 
 	if !h.tlsDisabled {
 		tlsCert, err := readTLSCert()
@@ -504,7 +525,7 @@ func newProcessorServiceHandler(processorClient processor.Client, mTLSDisabled, 
 	return &h
 }
 
-func newServiceHandler(ctx context.Context, kubeClient kubernetes.Interface, agonesClient versioned.Interface, health healthcheck.Handler, mTLSDisabled bool, tlsDisabled bool, remoteAllocationTimeout time.Duration, totalRemoteAllocationTimeout time.Duration, allocationBatchWaitTime time.Duration, grpcUnallocatedStatusCode codes.Code) *serviceHandler {
+func newServiceHandler(ctx context.Context, kubeClient kubernetes.Interface, agonesClient versioned.Interface, health healthcheck.Handler, mTLSDisabled bool, tlsDisabled bool, remoteAllocationTimeout time.Duration, totalRemoteAllocationTimeout time.Duration, allocationBatchWaitTime time.Duration, grpcUnallocatedStatusCode codes.Code, listMaxCapacity int64) *serviceHandler {
 	defaultResync := 30 * time.Second
 	agonesInformerFactory := externalversions.NewSharedInformerFactory(agonesClient, defaultResync)
 	kubeInformerFactory := informers.NewSharedInformerFactory(kubeClient, defaultResync)
@@ -518,7 +539,8 @@ func newServiceHandler(ctx context.Context, kubeClient kubernetes.Interface, ago
 		gameserverallocations.NewAllocationCache(agonesInformerFactory.Agones().V1().GameServers(), gsCounter, health),
 		remoteAllocationTimeout,
 		totalRemoteAllocationTimeout,
-		allocationBatchWaitTime)
+		allocationBatchWaitTime,
+		listMaxCapacity)
 
 	h := serviceHandler{
 		allocationCallback: func(allocationCtx context.Context, gsa *allocationv1.GameServerAllocation) (k8sruntime.Object, error) {
@@ -528,6 +550,7 @@ func newServiceHandler(ctx context.Context, kubeClient kubernetes.Interface, ago
 		tlsDisabled:               tlsDisabled,
 		grpcUnallocatedStatusCode: grpcUnallocatedStatusCode,
 	}
+	h.errs = errors.FromStruct(&h)
 
 	kubeInformerFactory.Start(ctx.Done())
 	agonesInformerFactory.Start(ctx.Done())
@@ -615,6 +638,7 @@ func (h *serviceHandler) getGRPCServerOptions() []grpc.ServerOption {
 	if !h.mTLSDisabled {
 		cfg.ClientAuth = tls.RequireAnyClientCert
 		cfg.VerifyPeerCertificate = h.verifyClientCertificate
+		cfg.VerifyConnection = h.verifyClientConnection
 	}
 
 	return append([]grpc.ServerOption{grpc.Creds(credentials.NewTLS(cfg))}, opts...)
@@ -624,6 +648,27 @@ func (h *serviceHandler) getTLSCert(_ *tls.ClientHelloInfo) (*tls.Certificate, e
 	h.tlsMutex.RLock()
 	defer h.tlsMutex.RUnlock()
 	return h.tlsCert, nil
+}
+
+// verifyClientConnection re-runs client certificate verification for every
+// connection, including resumed ones.
+//
+// VerifyPeerCertificate only fires during a full handshake. A client that
+// completed one handshake can then resume its session indefinitely without the
+// certificate being looked at again -- so removing a CA from the watched
+// certDir would not actually lock out clients holding a valid session ticket.
+// VerifyConnection runs on resumption as well, which closes that gap.
+func (h *serviceHandler) verifyClientConnection(cs tls.ConnectionState) error {
+	if len(cs.PeerCertificates) == 0 {
+		return h.errs.New("no client certificate presented")
+	}
+
+	rawCerts := make([][]byte, 0, len(cs.PeerCertificates))
+	for _, cert := range cs.PeerCertificates {
+		rawCerts = append(rawCerts, cert.Raw)
+	}
+
+	return h.verifyClientCertificate(rawCerts, nil)
 }
 
 // verifyClientCertificate verifies that the client certificate is accepted
@@ -640,7 +685,7 @@ func (h *serviceHandler) verifyClientCertificate(rawCerts [][]byte, _ [][]*x509.
 		cert, err := x509.ParseCertificate(rawCert)
 		if err != nil {
 			logger.WithError(err).Warning("cannot parse intermediate certificate")
-			return errors.New("bad intermediate certificate: " + err.Error())
+			return h.errs.Wrap(err, "bad intermediate certificate")
 		}
 		opts.Intermediates.AddCert(cert)
 	}
@@ -648,7 +693,7 @@ func (h *serviceHandler) verifyClientCertificate(rawCerts [][]byte, _ [][]*x509.
 	c, err := x509.ParseCertificate(rawCerts[0])
 	if err != nil {
 		logger.WithError(err).Warning("cannot parse client certificate")
-		return errors.New("bad client certificate: " + err.Error())
+		return h.errs.Wrap(err, "bad client certificate")
 	}
 
 	h.certMutex.RLock()
@@ -656,7 +701,7 @@ func (h *serviceHandler) verifyClientCertificate(rawCerts [][]byte, _ [][]*x509.
 	_, err = c.Verify(opts)
 	if err != nil {
 		logger.WithError(err).Warning("failed to verify client certificate")
-		return errors.New("failed to verify client certificate: " + err.Error())
+		return h.errs.Wrap(err, "failed to verify client certificate")
 	}
 	return nil
 }
@@ -666,7 +711,7 @@ func getClients(ctlConfig config) (*kubernetes.Clientset, *versioned.Clientset, 
 	// Create the in-cluster config
 	config, err := rest.InClusterConfig()
 	if err != nil {
-		return nil, nil, errors.New("Could not create in cluster config")
+		return nil, nil, errs.Wrap(err, "Could not create in cluster config")
 	}
 
 	config.QPS = float32(ctlConfig.APIServerSustainedQPS)
@@ -675,13 +720,13 @@ func getClients(ctlConfig config) (*kubernetes.Clientset, *versioned.Clientset, 
 	// Access to the Agones resources through the Agones Clientset
 	kubeClient, err := kubernetes.NewForConfig(config)
 	if err != nil {
-		return nil, nil, errors.New("Could not create the kubernetes api clientset")
+		return nil, nil, errs.Wrap(err, "Could not create the kubernetes api clientset")
 	}
 
 	// Access to the Agones resources through the Agones Clientset
 	agonesClient, err := versioned.NewForConfig(config)
 	if err != nil {
-		return nil, nil, errors.New("Could not create the agones api clientset")
+		return nil, nil, errs.Wrap(err, "Could not create the agones api clientset")
 	}
 	return kubeClient, agonesClient, nil
 }
@@ -700,6 +745,8 @@ func getCACertPool(path string) (*x509.CertPool, error) {
 			continue
 		}
 		certFile := filepath.Join(path, dirEntry.Name())
+		//nolint:gosec // G304: certFile is joined from certDir, a compile-time
+		// constant, and a name listed by ReadDir of that same directory.
 		caCert, err := os.ReadFile(certFile)
 		if err != nil {
 			logger.Errorf("CA cert is not readable or missing: %s", err.Error())
@@ -730,6 +777,8 @@ type serviceHandler struct {
 	grpcUnallocatedStatusCode codes.Code
 
 	processorClient processor.Client
+
+	errs *errors.Errors
 }
 
 // Allocate implements the Allocate gRPC method definition

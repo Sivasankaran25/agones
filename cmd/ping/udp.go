@@ -17,15 +17,15 @@ package main
 import (
 	"bytes"
 	"context"
+	stderrors "errors"
 	"math"
 	"net"
 	"os"
 	"sync"
 	"time"
 
+	"agones.dev/agones/pkg/util/errors"
 	"agones.dev/agones/pkg/util/runtime"
-
-	"github.com/pkg/errors"
 
 	"github.com/sirupsen/logrus"
 	"golang.org/x/time/rate"
@@ -45,6 +45,7 @@ type udpServer struct {
 	limits      map[string]*visitor
 	healthMutex sync.RWMutex
 	health      bool
+	errs        *errors.Errors
 }
 
 // visitor tracks when a visitor last sent
@@ -65,6 +66,7 @@ func newUDPServer(rateLimit rate.Limit) *udpServer {
 		limits:      map[string]*visitor{},
 	}
 	udpSrv.logger = runtime.NewLoggerWithType(udpSrv)
+	udpSrv.errs = errors.FromStruct(udpSrv)
 	return udpSrv
 }
 
@@ -74,7 +76,7 @@ func (u *udpServer) run(ctx context.Context) {
 
 	logger.Info("Starting UDP server")
 	var err error
-	u.conn, err = net.ListenPacket("udp", ":8080")
+	u.conn, err = (&net.ListenConfig{}).ListenPacket(ctx, "udp", ":8080")
 	if err != nil {
 		logger.WithError(err).Fatal("Could not start udp server")
 	}
@@ -112,7 +114,7 @@ func (u *udpServer) readWriteLoop(ctx context.Context) {
 				b := make([]byte, 1024)
 				_, sender, err := u.conn.ReadFrom(b)
 				if err != nil {
-					if ctx.Err() != nil && err == os.ErrClosed {
+					if ctx.Err() != nil && stderrors.Is(err, os.ErrClosed) {
 						return
 					}
 					u.logger.WithError(err).Error("Error reading udp packet")
@@ -175,7 +177,7 @@ func (u *udpServer) Health() error {
 	u.healthMutex.RLock()
 	defer u.healthMutex.RUnlock()
 	if !u.health {
-		return errors.New("UDP Server is unhealthy")
+		return u.errs.New("UDP Server is unhealthy")
 	}
 	return nil
 }

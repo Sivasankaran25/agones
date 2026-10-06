@@ -16,7 +16,6 @@ package v1
 
 import (
 	"fmt"
-	"sort"
 	"testing"
 
 	"agones.dev/agones/pkg/apis"
@@ -154,7 +153,7 @@ func TestGameServerSelectorApplyDefaults(t *testing.T) {
 	assert.Equal(t, int64(10), s.Counters["foo"].MaxAvailable)
 	assert.Equal(t, int64(2), s.Lists["bar"].MinAvailable)
 	assert.Equal(t, int64(0), s.Lists["bar"].MaxAvailable)
-	assert.Equal(t, "", s.Lists["bar"].ContainsValue)
+	assert.Empty(t, s.Lists["bar"].ContainsValue)
 
 	// Test apply defaults is idempotent -- calling ApplyDefaults more than one time does not change the original result.
 	s.ApplyDefaults()
@@ -165,7 +164,7 @@ func TestGameServerSelectorApplyDefaults(t *testing.T) {
 	assert.Equal(t, int64(10), s.Counters["foo"].MaxAvailable)
 	assert.Equal(t, int64(2), s.Lists["bar"].MinAvailable)
 	assert.Equal(t, int64(0), s.Lists["bar"].MaxAvailable)
-	assert.Equal(t, "", s.Lists["bar"].ContainsValue)
+	assert.Empty(t, s.Lists["bar"].ContainsValue)
 }
 
 func TestGameServerSelectorValidate(t *testing.T) {
@@ -313,17 +312,17 @@ func TestMetaPatchValidate(t *testing.T) {
 	}
 	path := field.NewPath("spec", "metadata")
 	allErrs := mp.Validate(path)
-	assert.Len(t, allErrs, 0)
+	assert.Empty(t, allErrs)
 
 	mp.Labels = map[string]string{}
 	mp.Annotations = map[string]string{}
 	allErrs = mp.Validate(path)
-	assert.Len(t, allErrs, 0)
+	assert.Empty(t, allErrs)
 
 	mp.Labels["foo"] = "bar"
 	mp.Annotations["bar"] = "foo"
 	allErrs = mp.Validate(path)
-	assert.Len(t, allErrs, 0)
+	assert.Empty(t, allErrs)
 
 	// invalid label
 	invalid := mp.DeepCopy()
@@ -836,6 +835,9 @@ func TestGameServerCounterActions(t *testing.T) {
 	}
 }
 
+// defaultTestListMaxCapacity mirrors the `gameservers.lists.maxItems` Helm default.
+const defaultTestListMaxCapacity = int64(1000)
+
 func TestGameServerListActions(t *testing.T) {
 	t.Parallel()
 
@@ -844,11 +846,14 @@ func TestGameServerListActions(t *testing.T) {
 	require.NoError(t, runtime.ParseFeatures(fmt.Sprintf("%s=true", runtime.FeatureCountsAndLists)))
 
 	testScenarios := map[string]struct {
-		la      ListAction
-		list    string
-		gs      *agonesv1.GameServer
-		want    *agonesv1.GameServer
-		wantErr bool
+		la ListAction
+		// maxCapacity bounds a capacity change; left unset in scenarios that do not exercise the
+		// limit, in which case defaultTestListMaxCapacity is used.
+		maxCapacity int64
+		list        string
+		gs          *agonesv1.GameServer
+		want        *agonesv1.GameServer
+		wantErr     bool
 	}{
 		"update list capacity truncates list": {
 			la: ListAction{
@@ -929,11 +934,35 @@ func TestGameServerListActions(t *testing.T) {
 					}}}},
 			wantErr: false,
 		},
+		"capacity above a configured max below the old hardcoded 1000 errors": {
+			la: ListAction{
+				Capacity: int64Pointer(26),
+			},
+			maxCapacity: 25,
+			list:        "pages",
+			gs: &agonesv1.GameServer{Status: agonesv1.GameServerStatus{
+				Lists: map[string]agonesv1.ListStatus{
+					"pages": {
+						Values:   []string{"page1"},
+						Capacity: 5,
+					}}}},
+			want: &agonesv1.GameServer{Status: agonesv1.GameServerStatus{
+				Lists: map[string]agonesv1.ListStatus{
+					"pages": {
+						Values:   []string{"page1"},
+						Capacity: 5,
+					}}}},
+			wantErr: true,
+		},
 	}
 
 	for test, testScenario := range testScenarios {
 		t.Run(test, func(t *testing.T) {
-			errs := testScenario.la.ListActions(testScenario.list, testScenario.gs)
+			maxCapacity := testScenario.maxCapacity
+			if maxCapacity == 0 {
+				maxCapacity = defaultTestListMaxCapacity
+			}
+			errs := testScenario.la.ListActions(testScenario.list, testScenario.gs, maxCapacity)
 			if errs != nil {
 				assert.True(t, testScenario.wantErr)
 			} else {
@@ -1166,15 +1195,11 @@ func TestValidateListActions(t *testing.T) {
 func TestGameServerAllocationValidate(t *testing.T) {
 	t.Parallel()
 
-	runtime.FeatureTestMutex.Lock()
-	defer runtime.FeatureTestMutex.Unlock()
-	require.NoError(t, runtime.ParseFeatures(fmt.Sprintf("%s=false", runtime.FeatureCountsAndLists)))
-
 	gsa := &GameServerAllocation{}
 	gsa.ApplyDefaults()
 
 	allErrs := gsa.Validate()
-	assert.Len(t, allErrs, 0)
+	assert.Empty(t, allErrs)
 
 	gsa.Spec.Scheduling = "FLERG"
 
@@ -1184,7 +1209,7 @@ func TestGameServerAllocationValidate(t *testing.T) {
 	assert.Equal(t, field.ErrorTypeNotSupported, allErrs[0].Type)
 	assert.Equal(t, "spec.scheduling", allErrs[0].Field)
 
-	// invalid player selection
+	// invalid label
 	gsa = &GameServerAllocation{
 		Spec: GameServerAllocationSpec{
 			MetaPatch: MetaPatch{
@@ -1198,21 +1223,10 @@ func TestGameServerAllocationValidate(t *testing.T) {
 	gsa.ApplyDefaults()
 
 	allErrs = gsa.Validate()
-	sort.Slice(allErrs, func(i, j int) bool {
-		return allErrs[i].Field > allErrs[j].Field
-	})
-	assert.Len(t, allErrs, 4)
+	assert.Len(t, allErrs, 1)
 
-	fields := []string{}
-	for _, err := range allErrs {
-		fields = append(fields, err.Field)
-	}
-	assert.ElementsMatch(t, []string{
-		"spec.priorities",
-		"spec.metadata.labels",
-		"spec.lists",
-		"spec.counters",
-	}, fields)
+	assert.Equal(t, field.ErrorTypeInvalid, allErrs[0].Type)
+	assert.Equal(t, "spec.metadata.labels", allErrs[0].Field)
 }
 
 func TestSortKey(t *testing.T) {

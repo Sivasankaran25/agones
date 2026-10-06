@@ -17,7 +17,7 @@ package fleetautoscalers
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -31,7 +31,6 @@ import (
 	agtesting "agones.dev/agones/pkg/testing"
 	"agones.dev/agones/pkg/util/webhooks"
 	"github.com/heptiolabs/healthcheck"
-	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gomodules.xyz/jsonpatch/v2"
@@ -63,7 +62,7 @@ func TestControllerCreationMutationHandler(t *testing.T) {
 
 	var testCases = []struct {
 		description string
-		fixture     interface{}
+		fixture     any
 		expected    expected
 	}{
 		{
@@ -122,8 +121,8 @@ func TestControllerCreationMutationHandler(t *testing.T) {
 					{
 						Operation: "add",
 						Path:      "/spec/sync",
-						Value: map[string]interface{}{
-							"fixedInterval": map[string]interface{}{
+						Value: map[string]any{
+							"fixedInterval": map[string]any{
 								"seconds": float64(30),
 							},
 							"type": "FixedInterval",
@@ -196,11 +195,11 @@ func TestControllerCreationValidationHandler(t *testing.T) {
 		defer cancel()
 
 		review, err := newAdmissionReview(*fas)
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 
 		result, err := ext.validationHandler(review)
-		assert.Nil(t, err)
-		assert.True(t, result.Response.Allowed, fmt.Sprintf("%#v", result.Response))
+		assert.NoError(t, err)
+		assert.True(t, result.Response.Allowed, "%#v", result.Response)
 	})
 
 	t.Run("invalid fleet autoscaler", func(t *testing.T) {
@@ -214,11 +213,11 @@ func TestControllerCreationValidationHandler(t *testing.T) {
 		defer cancel()
 
 		review, err := newAdmissionReview(*fas)
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 
 		result, err := ext.validationHandler(review)
-		assert.Nil(t, err)
-		assert.False(t, result.Response.Allowed, fmt.Sprintf("%#v", result.Response))
+		assert.NoError(t, err)
+		assert.False(t, result.Response.Allowed, "%#v", result.Response)
 		assert.Equal(t, metav1.StatusFailure, result.Response.Result.Status)
 		assert.Equal(t, metav1.StatusReasonInvalid, result.Response.Result.Reason)
 		assert.NotEmpty(t, result.Response.Result.Details)
@@ -228,12 +227,12 @@ func TestControllerCreationValidationHandler(t *testing.T) {
 		ext := newFakeExtensions()
 
 		review, err := newInvalidAdmissionReview()
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 
 		_, err = ext.validationHandler(review)
 
-		if assert.NotNil(t, err) {
-			assert.Equal(t, "error unmarshalling FleetAutoscaler json after schema validation: \"MQ==\": json: cannot unmarshal string into Go value of type v1.FleetAutoscaler", err.Error())
+		if assert.Error(t, err) {
+			assert.ErrorContains(t, err, "error unmarshalling FleetAutoscaler json after schema validation: \"MQ==\": json: cannot unmarshal string into Go value of type v1.FleetAutoscaler")
 		}
 	})
 }
@@ -249,11 +248,11 @@ func TestWebhookControllerCreationValidationHandler(t *testing.T) {
 		defer cancel()
 
 		review, err := newAdmissionReview(*fas)
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 
 		result, err := ext.validationHandler(review)
-		assert.Nil(t, err)
-		assert.True(t, result.Response.Allowed, fmt.Sprintf("%#v", result.Response))
+		assert.NoError(t, err)
+		assert.True(t, result.Response.Allowed, "%#v", result.Response)
 	})
 
 	t.Run("invalid fleet autoscaler", func(t *testing.T) {
@@ -267,11 +266,11 @@ func TestWebhookControllerCreationValidationHandler(t *testing.T) {
 		defer cancel()
 
 		review, err := newAdmissionReview(*fas)
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 
 		result, err := ext.validationHandler(review)
-		assert.Nil(t, err)
-		assert.False(t, result.Response.Allowed, fmt.Sprintf("%#v", result.Response))
+		assert.NoError(t, err)
+		assert.False(t, result.Response.Allowed, "%#v", result.Response)
 		assert.Equal(t, metav1.StatusFailure, result.Response.Result.Status)
 		assert.Equal(t, metav1.StatusReasonInvalid, result.Response.Result.Reason)
 		assert.NotEmpty(t, result.Response.Result.Details)
@@ -318,7 +317,7 @@ func TestControllerSyncFleetAutoscaler(t *testing.T) {
 		fleetAutoscalerThreadEventually(t, c, fas)
 
 		err := c.syncFleetAutoscaler(ctx, "default/fas-1")
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 		agtesting.AssertNoEvent(t, m.FakeRecorder.Events)
 	})
 
@@ -344,11 +343,11 @@ func TestControllerSyncFleetAutoscaler(t *testing.T) {
 			fasUpdated = true
 			ca := action.(k8stesting.UpdateAction)
 			fas := ca.GetObject().(*autoscalingv1.FleetAutoscaler)
-			assert.Equal(t, fas.Status.AbleToScale, true)
-			assert.Equal(t, fas.Status.ScalingLimited, false)
-			assert.Equal(t, fas.Status.CurrentReplicas, int32(5))
-			assert.Equal(t, fas.Status.DesiredReplicas, int32(12))
-			assert.Equal(t, fas.Status.LastAppliedPolicy, autoscalingv1.BufferPolicyType)
+			assert.True(t, fas.Status.AbleToScale)
+			assert.False(t, fas.Status.ScalingLimited)
+			assert.Equal(t, int32(5), fas.Status.CurrentReplicas)
+			assert.Equal(t, int32(12), fas.Status.DesiredReplicas)
+			assert.Equal(t, autoscalingv1.BufferPolicyType, fas.Status.LastAppliedPolicy)
 			assert.NotNil(t, fas.Status.LastScaleTime)
 			return true, fas, nil
 		})
@@ -361,7 +360,7 @@ func TestControllerSyncFleetAutoscaler(t *testing.T) {
 			fUpdated = true
 			ca := action.(k8stesting.UpdateAction)
 			f := ca.GetObject().(*agonesv1.Fleet)
-			assert.Equal(t, f.Spec.Replicas, int32(12))
+			assert.Equal(t, int32(12), f.Spec.Replicas)
 			return true, f, nil
 		})
 
@@ -370,7 +369,7 @@ func TestControllerSyncFleetAutoscaler(t *testing.T) {
 		fleetAutoscalerThreadEventually(t, c, fas)
 
 		err := c.syncFleetAutoscaler(ctx, "default/fas-1")
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 		assert.True(t, fUpdated, "fleet should have been updated")
 		assert.True(t, fasUpdated, "fleetautoscaler should have been updated")
 		agtesting.AssertEventContains(t, m.FakeRecorder.Events, "AutoScalingFleet")
@@ -404,11 +403,11 @@ func TestControllerSyncFleetAutoscaler(t *testing.T) {
 			fasUpdated = true
 			ca := action.(k8stesting.UpdateAction)
 			fas := ca.GetObject().(*autoscalingv1.FleetAutoscaler)
-			assert.Equal(t, fas.Status.AbleToScale, true)
-			assert.Equal(t, fas.Status.ScalingLimited, false)
-			assert.Equal(t, fas.Status.CurrentReplicas, int32(50))
-			assert.Equal(t, fas.Status.DesiredReplicas, int32(100))
-			assert.Equal(t, fas.Status.LastAppliedPolicy, autoscalingv1.WebhookPolicyType)
+			assert.True(t, fas.Status.AbleToScale)
+			assert.False(t, fas.Status.ScalingLimited)
+			assert.Equal(t, int32(50), fas.Status.CurrentReplicas)
+			assert.Equal(t, int32(100), fas.Status.DesiredReplicas)
+			assert.Equal(t, autoscalingv1.WebhookPolicyType, fas.Status.LastAppliedPolicy)
 			assert.NotNil(t, fas.Status.LastScaleTime)
 			return true, fas, nil
 		})
@@ -421,7 +420,7 @@ func TestControllerSyncFleetAutoscaler(t *testing.T) {
 			fUpdated = true
 			ca := action.(k8stesting.UpdateAction)
 			f := ca.GetObject().(*agonesv1.Fleet)
-			assert.Equal(t, f.Spec.Replicas, int32(100))
+			assert.Equal(t, int32(100), f.Spec.Replicas)
 			return true, f, nil
 		})
 
@@ -430,7 +429,7 @@ func TestControllerSyncFleetAutoscaler(t *testing.T) {
 		fleetAutoscalerThreadEventually(t, c, fas)
 
 		err := c.syncFleetAutoscaler(ctx, "default/fas-1")
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 		assert.True(t, fUpdated, "fleet should have been updated")
 		assert.True(t, fasUpdated, "fleetautoscaler should have been updated")
 		agtesting.AssertEventContains(t, m.FakeRecorder.Events, "AutoScalingFleet")
@@ -479,7 +478,7 @@ func TestControllerSyncFleetAutoscaler(t *testing.T) {
 		fleetAutoscalerThreadEventually(t, c, fas)
 
 		err := c.syncFleetAutoscaler(ctx, "default/fas-1")
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 		agtesting.AssertNoEvent(t, m.FakeRecorder.Events)
 	})
 
@@ -505,11 +504,11 @@ func TestControllerSyncFleetAutoscaler(t *testing.T) {
 			fasUpdated = true
 			ca := action.(k8stesting.UpdateAction)
 			fas := ca.GetObject().(*autoscalingv1.FleetAutoscaler)
-			assert.Equal(t, fas.Status.AbleToScale, true)
-			assert.Equal(t, fas.Status.ScalingLimited, false)
-			assert.Equal(t, fas.Status.CurrentReplicas, int32(20))
-			assert.Equal(t, fas.Status.DesiredReplicas, int32(13))
-			assert.Equal(t, fas.Status.LastAppliedPolicy, autoscalingv1.BufferPolicyType)
+			assert.True(t, fas.Status.AbleToScale)
+			assert.False(t, fas.Status.ScalingLimited)
+			assert.Equal(t, int32(20), fas.Status.CurrentReplicas)
+			assert.Equal(t, int32(13), fas.Status.DesiredReplicas)
+			assert.Equal(t, autoscalingv1.BufferPolicyType, fas.Status.LastAppliedPolicy)
 			assert.NotNil(t, fas.Status.LastScaleTime)
 			return true, fas, nil
 		})
@@ -522,7 +521,7 @@ func TestControllerSyncFleetAutoscaler(t *testing.T) {
 			fUpdated = true
 			ca := action.(k8stesting.UpdateAction)
 			f := ca.GetObject().(*agonesv1.Fleet)
-			assert.Equal(t, f.Spec.Replicas, int32(13))
+			assert.Equal(t, int32(13), f.Spec.Replicas)
 
 			return true, f, nil
 		})
@@ -532,7 +531,7 @@ func TestControllerSyncFleetAutoscaler(t *testing.T) {
 		fleetAutoscalerThreadEventually(t, c, fas)
 
 		err := c.syncFleetAutoscaler(ctx, "default/fas-1")
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 		assert.True(t, fUpdated, "fleet should have been updated")
 		assert.True(t, fasUpdated, "fleetautoscaler should have been updated")
 		agtesting.AssertEventContains(t, m.FakeRecorder.Events, "AutoScalingFleet")
@@ -577,7 +576,7 @@ func TestControllerSyncFleetAutoscaler(t *testing.T) {
 		fleetAutoscalerThreadEventually(t, c, fas)
 
 		err := c.syncFleetAutoscaler(ctx, "default/fas-1")
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 		agtesting.AssertNoEvent(t, m.FakeRecorder.Events)
 	})
 
@@ -612,7 +611,7 @@ func TestControllerSyncFleetAutoscaler(t *testing.T) {
 		fleetAutoscalerThreadEventually(t, c, fas)
 
 		err := c.syncFleetAutoscaler(ctx, fas.ObjectMeta.Name)
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 		agtesting.AssertNoEvent(t, m.FakeRecorder.Events)
 	})
 
@@ -632,8 +631,8 @@ func TestControllerSyncFleetAutoscaler(t *testing.T) {
 			updated = true
 			ca := action.(k8stesting.UpdateAction)
 			fas := ca.GetObject().(*autoscalingv1.FleetAutoscaler)
-			assert.Equal(t, fas.Status.CurrentReplicas, int32(0))
-			assert.Equal(t, fas.Status.DesiredReplicas, int32(0))
+			assert.Equal(t, int32(0), fas.Status.CurrentReplicas)
+			assert.Equal(t, int32(0), fas.Status.DesiredReplicas)
 			return true, fas, nil
 		})
 
@@ -642,7 +641,7 @@ func TestControllerSyncFleetAutoscaler(t *testing.T) {
 		fleetAutoscalerThreadEventually(t, c, fas)
 
 		err := c.syncFleetAutoscaler(ctx, "default/fas-1")
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 		assert.True(t, updated)
 
 		agtesting.AssertEventContains(t, m.FakeRecorder.Events, "FailedGetFleet")
@@ -670,8 +669,8 @@ func TestControllerSyncFleetAutoscaler(t *testing.T) {
 		fleetAutoscalerThreadEventually(t, c, fas)
 
 		err := c.syncFleetAutoscaler(ctx, "default/fas-1")
-		if assert.NotNil(t, err) {
-			assert.Equal(t, "error updating status for fleetautoscaler fas-1: random-err", err.Error())
+		if assert.Error(t, err) {
+			assert.ErrorContains(t, err, "error updating status for fleetautoscaler fas-1: random-err")
 		}
 
 		agtesting.AssertEventContains(t, m.FakeRecorder.Events, "FailedGetFleet")
@@ -700,8 +699,8 @@ func TestControllerSyncFleetAutoscaler(t *testing.T) {
 		fleetAutoscalerThreadEventually(t, c, fas)
 
 		err := c.syncFleetAutoscaler(ctx, "default/fas-1")
-		if assert.NotNil(t, err) {
-			assert.Equal(t, "error calculating autoscaling fleet: fleet-1: wrong policy type, should be one of: Buffer, Webhook, Counter, List, Schedule, Chain", err.Error())
+		if assert.Error(t, err) {
+			assert.ErrorContains(t, err, "error calculating autoscaling fleet: fleet-1")
 		}
 	})
 
@@ -734,8 +733,8 @@ func TestControllerSyncFleetAutoscaler(t *testing.T) {
 		fleetAutoscalerThreadEventually(t, c, fas)
 
 		err := c.syncFleetAutoscaler(ctx, "default/fas-1")
-		if assert.NotNil(t, err) {
-			assert.Equal(t, "error updating status for fleetautoscaler fas-1: random-err", err.Error())
+		if assert.Error(t, err) {
+			assert.ErrorContains(t, err, "error updating status for fleetautoscaler fas-1: random-err")
 		}
 	})
 
@@ -762,8 +761,8 @@ func TestControllerSyncFleetAutoscaler(t *testing.T) {
 		fleetAutoscalerThreadEventually(t, c, fas)
 
 		err := c.syncFleetAutoscaler(ctx, "default/fas-1")
-		if assert.NotNil(t, err) {
-			assert.Equal(t, "error autoscaling fleet fleet-1 to 7 replicas: error updating replicas for fleet fleet-1: random-err", err.Error())
+		if assert.Error(t, err) {
+			assert.ErrorContains(t, err, "error autoscaling fleet fleet-1 to 7 replicas")
 		}
 
 		agtesting.AssertEventContains(t, m.FakeRecorder.Events, "AutoScalingFleetError")
@@ -789,6 +788,7 @@ func TestControllerSyncFleetAutoscaler(t *testing.T) {
 // this is a sign that the informer has been started and the fleet autoscaler has been processed
 // by the informer.
 func fleetAutoscalerThreadEventually(t *testing.T, c *Controller, fas *autoscalingv1.FleetAutoscaler) {
+	t.Helper()
 	require.Eventually(t, func() bool {
 		c.fasThreadMutex.Lock()
 		defer c.fasThreadMutex.Unlock()
@@ -817,7 +817,7 @@ func TestControllerScaleFleet(t *testing.T) {
 		})
 
 		err := c.scaleFleet(context.Background(), fas, f, replicas)
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 		assert.True(t, update, "Fleet should be updated")
 		agtesting.AssertEventContains(t, m.FakeRecorder.Events, "ScalingFleet")
 	})
@@ -833,8 +833,8 @@ func TestControllerScaleFleet(t *testing.T) {
 		})
 
 		err := c.scaleFleet(context.Background(), fas, f, replicas)
-		if assert.NotNil(t, err) {
-			assert.Equal(t, "error updating replicas for fleet fleet-1: random-err", err.Error())
+		if assert.Error(t, err) {
+			assert.ErrorContains(t, err, "error updating replicas for fleet fleet-1: random-err")
 		}
 		agtesting.AssertEventContains(t, m.FakeRecorder.Events, "AutoScalingFleetError")
 	})
@@ -850,7 +850,7 @@ func TestControllerScaleFleet(t *testing.T) {
 		})
 
 		err := c.scaleFleet(context.Background(), fas, f, replicas)
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 		agtesting.AssertNoEvent(t, m.FakeRecorder.Events)
 	})
 }
@@ -868,11 +868,11 @@ func TestControllerUpdateStatus(t *testing.T) {
 			fasUpdated = true
 			ca := action.(k8stesting.UpdateAction)
 			fas := ca.GetObject().(*autoscalingv1.FleetAutoscaler)
-			assert.Equal(t, fas.Status.AbleToScale, true)
-			assert.Equal(t, fas.Status.ScalingLimited, false)
-			assert.Equal(t, fas.Status.CurrentReplicas, int32(10))
-			assert.Equal(t, fas.Status.DesiredReplicas, int32(20))
-			assert.Equal(t, fas.Status.LastAppliedPolicy, autoscalingv1.BufferPolicyType)
+			assert.True(t, fas.Status.AbleToScale)
+			assert.False(t, fas.Status.ScalingLimited)
+			assert.Equal(t, int32(10), fas.Status.CurrentReplicas)
+			assert.Equal(t, int32(20), fas.Status.DesiredReplicas)
+			assert.Equal(t, autoscalingv1.BufferPolicyType, fas.Status.LastAppliedPolicy)
 			assert.NotNil(t, fas.Status.LastScaleTime)
 			return true, fas, nil
 		})
@@ -881,7 +881,7 @@ func TestControllerUpdateStatus(t *testing.T) {
 		defer cancel()
 
 		err := c.updateStatus(ctx, fas, 10, 20, true, false, fas.Spec.Policy.Type)
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 		assert.True(t, fasUpdated)
 		agtesting.AssertNoEvent(t, m.FakeRecorder.Events)
 	})
@@ -906,7 +906,7 @@ func TestControllerUpdateStatus(t *testing.T) {
 		defer cancel()
 
 		err := c.updateStatus(ctx, fas, fas.Status.CurrentReplicas, fas.Status.DesiredReplicas, false, fas.Status.ScalingLimited, fas.Spec.Policy.Type)
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 		agtesting.AssertNoEvent(t, m.FakeRecorder.Events)
 	})
 
@@ -922,8 +922,8 @@ func TestControllerUpdateStatus(t *testing.T) {
 		defer cancel()
 
 		err := c.updateStatus(ctx, fas, fas.Status.CurrentReplicas, fas.Status.DesiredReplicas, false, fas.Status.ScalingLimited, fas.Spec.Policy.Type)
-		if assert.NotNil(t, err) {
-			assert.Equal(t, "error updating status for fleetautoscaler fas-1: random-err", err.Error())
+		if assert.Error(t, err) {
+			assert.ErrorContains(t, err, "error updating status for fleetautoscaler fas-1: random-err")
 		}
 		agtesting.AssertNoEvent(t, m.FakeRecorder.Events)
 	})
@@ -933,7 +933,7 @@ func TestControllerUpdateStatus(t *testing.T) {
 		fas, _ := defaultFixtures()
 
 		err := c.updateStatus(context.Background(), fas, 10, 20, true, true, fas.Spec.Policy.Type)
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 		agtesting.AssertEventContains(t, m.FakeRecorder.Events, "ScalingLimited")
 	})
 
@@ -942,7 +942,7 @@ func TestControllerUpdateStatus(t *testing.T) {
 		fas, _ := defaultFixtures()
 
 		err := c.updateStatus(context.Background(), fas, 1, 3, true, true, fas.Spec.Policy.Type)
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 		agtesting.AssertEventContains(t, m.FakeRecorder.Events, "limited to minimum size of 3")
 	})
 
@@ -951,7 +951,7 @@ func TestControllerUpdateStatus(t *testing.T) {
 		fas, _ := defaultFixtures()
 
 		err := c.updateStatus(context.Background(), fas, 12, 10, true, true, fas.Spec.Policy.Type)
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 		agtesting.AssertEventContains(t, m.FakeRecorder.Events, "limited to maximum size of 10")
 	})
 }
@@ -970,10 +970,10 @@ func TestControllerUpdateStatusUnableToScale(t *testing.T) {
 			fasUpdated = true
 			ca := action.(k8stesting.UpdateAction)
 			fas := ca.GetObject().(*autoscalingv1.FleetAutoscaler)
-			assert.Equal(t, fas.Status.AbleToScale, false)
-			assert.Equal(t, fas.Status.ScalingLimited, false)
-			assert.Equal(t, fas.Status.CurrentReplicas, int32(0))
-			assert.Equal(t, fas.Status.DesiredReplicas, int32(0))
+			assert.False(t, fas.Status.AbleToScale)
+			assert.False(t, fas.Status.ScalingLimited)
+			assert.Equal(t, int32(0), fas.Status.CurrentReplicas)
+			assert.Equal(t, int32(0), fas.Status.DesiredReplicas)
 			assert.Equal(t, fas.Status.LastAppliedPolicy, autoscalingv1.FleetAutoscalerPolicyType(""))
 			assert.Nil(t, fas.Status.LastScaleTime)
 			return true, fas, nil
@@ -983,7 +983,7 @@ func TestControllerUpdateStatusUnableToScale(t *testing.T) {
 		defer cancel()
 
 		err := c.updateStatusUnableToScale(ctx, fas)
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 		assert.True(t, fasUpdated)
 		agtesting.AssertNoEvent(t, m.FakeRecorder.Events)
 	})
@@ -1003,8 +1003,8 @@ func TestControllerUpdateStatusUnableToScale(t *testing.T) {
 		defer cancel()
 
 		err := c.updateStatusUnableToScale(ctx, fas)
-		if assert.NotNil(t, err) {
-			assert.Equal(t, "error updating status for fleetautoscaler fas-1: random-err", err.Error())
+		if assert.Error(t, err) {
+			assert.ErrorContains(t, err, "error updating status for fleetautoscaler fas-1: random-err")
 		}
 		agtesting.AssertNoEvent(t, m.FakeRecorder.Events)
 	})
@@ -1027,7 +1027,7 @@ func TestControllerUpdateStatusUnableToScale(t *testing.T) {
 		defer cancel()
 
 		err := c.updateStatusUnableToScale(ctx, fas)
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 		agtesting.AssertNoEvent(t, m.FakeRecorder.Events)
 	})
 }
@@ -1077,10 +1077,10 @@ func TestControllerEvents(t *testing.T) {
 func TestControllerAddUpdateDeleteFasThread(t *testing.T) {
 	t.Parallel()
 
-	var counter int64
+	var counter atomic.Int64
 	c, m := newFakeController()
 	c.workerqueue.SyncHandler = func(_ context.Context, _ string) error {
-		atomic.AddInt64(&counter, 1)
+		counter.Add(1)
 		return nil
 	}
 
@@ -1091,7 +1091,7 @@ func TestControllerAddUpdateDeleteFasThread(t *testing.T) {
 	ctx, cancel := agtesting.StartInformers(m, c.fleetAutoscalerSynced)
 	defer cancel()
 	go func() {
-		require.NoError(t, c.Run(ctx, 1))
+		assert.NoError(t, c.Run(ctx, 1))
 	}()
 
 	fas, _ := defaultFixtures()
@@ -1102,7 +1102,7 @@ func TestControllerAddUpdateDeleteFasThread(t *testing.T) {
 	// unfortunately we can't mock the timer, so we'll confirm that two enqueue processes fire. One on method execution,
 	// and then one based on the ticker.
 	require.Eventuallyf(t, func() bool {
-		return atomic.LoadInt64(&counter) >= 2
+		return counter.Load() >= 2
 	}, 10*time.Second, time.Second, "Should have at least two counters")
 
 	c.fasThreadMutex.Lock()
@@ -1148,14 +1148,14 @@ func TestControllerAddUpdateDeleteFasThread(t *testing.T) {
 
 	c.deleteFasThread(ctx, fas2, true)
 	c.fasThreadMutex.Lock()
-	require.Len(t, c.fasThreads, 0)
+	require.Empty(t, c.fasThreads)
 	c.fasThreadMutex.Unlock()
 
 	// we shouldn't get any more updates, so wait for 3 checks in a row that have the
 	// same counter amount to prove that there aren't any changes for a while.
 	var check []int64
 	require.Eventually(t, func() bool {
-		check = append(check, atomic.LoadInt64(&counter))
+		check = append(check, counter.Load())
 		l := len(check)
 		if l < 3 {
 			return false

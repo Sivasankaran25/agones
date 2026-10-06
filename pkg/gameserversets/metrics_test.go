@@ -16,7 +16,6 @@ package gameserversets
 
 import (
 	"bufio"
-	"context"
 	"net/http"
 	"strings"
 	"testing"
@@ -80,12 +79,11 @@ func TestGSSMetrics(t *testing.T) {
 	defer cancel()
 
 	err := c.addMoreGameServers(ctx, gsSet, expected)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.Equal(t, expected, count)
 	agtesting.AssertEventContains(t, m.FakeRecorder.Events, "SuccessfulCreate")
 
-	ctxHTTP, cancelHTTP := context.WithCancel(context.Background())
-	defer cancelHTTP()
+	ctxHTTP := t.Context()
 
 	// Start the HTTP server
 	go func() {

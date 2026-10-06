@@ -3,7 +3,7 @@ title="Agones Kubernetes API"
 description="Detailed list of Agones Custom Resource Definitions available"
 +++
 
-{{% feature publishVersion="1.60.0" %}}
+{{% feature publishVersion="1.61.0" %}}
 <p>Packages:</p>
 <ul>
 <li>
@@ -365,7 +365,8 @@ map[string]agones.dev/agones/pkg/apis/agones/v1.ListStatus
 </td>
 <td>
 <em>(Optional)</em>
-<p>(Beta, CountsAndLists feature flag) Lists provides the configuration for tracking of lists of up to 1000 values against a GameServer.
+<p>(Beta, CountsAndLists feature flag) Lists provides the configuration for tracking of lists of values against a GameServer,
+up to the maximum configured by the <code>gameservers.lists.maxItems</code> Helm value.
 Keys must be declared at GameServer creation time.</p>
 </td>
 </tr>
@@ -1538,7 +1539,8 @@ map[string]agones.dev/agones/pkg/apis/agones/v1.ListStatus
 </td>
 <td>
 <em>(Optional)</em>
-<p>(Beta, CountsAndLists feature flag) Lists provides the configuration for tracking of lists of up to 1000 values against a GameServer.
+<p>(Beta, CountsAndLists feature flag) Lists provides the configuration for tracking of lists of values against a GameServer,
+up to the maximum configured by the <code>gameservers.lists.maxItems</code> Helm value.
 Keys must be declared at GameServer creation time.</p>
 </td>
 </tr>
@@ -1963,7 +1965,8 @@ map[string]agones.dev/agones/pkg/apis/agones/v1.ListStatus
 </td>
 <td>
 <em>(Optional)</em>
-<p>(Beta, CountsAndLists feature flag) Lists provides the configuration for tracking of lists of up to 1000 values against a GameServer.
+<p>(Beta, CountsAndLists feature flag) Lists provides the configuration for tracking of lists of values against a GameServer,
+up to the maximum configured by the <code>gameservers.lists.maxItems</code> Helm value.
 Keys must be declared at GameServer creation time.</p>
 </td>
 </tr>
@@ -4969,3 +4972,4 @@ ClusterConnectionInfo
 Generated with <code>gen-crd-api-reference-docs</code>.
 </em></p>
 {{% /feature %}}
+

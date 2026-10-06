@@ -16,8 +16,10 @@ package processor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"sync"
 	"time"
 
@@ -99,7 +101,7 @@ func (h *Handler) StreamBatches(stream allocationpb.Processor_StreamBatchesServe
 	for {
 		msg, err := stream.Recv()
 		if err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				handlerLogger.WithField(logFieldClientID, clientID).Debug("Stream closed by client")
 			} else {
 				handlerLogger.WithField(logFieldClientID, clientID).WithError(err).Warn("Stream receive error")
@@ -172,9 +174,7 @@ func (h *Handler) StartPullRequestTicker(ctx context.Context) {
 func (h *Handler) sendPullRequestsToClients() {
 	h.mu.RLock()
 	snapshot := make(map[string]allocationpb.Processor_StreamBatchesServer, len(h.clients))
-	for id, s := range h.clients {
-		snapshot[id] = s
-	}
+	maps.Copy(snapshot, h.clients)
 	h.mu.RUnlock()
 
 	for clientID, stream := range snapshot {

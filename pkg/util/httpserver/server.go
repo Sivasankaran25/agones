@@ -19,11 +19,18 @@ package httpserver
 import (
 	"context"
 	"net/http"
+	"time"
 
+	"agones.dev/agones/pkg/util/errors"
 	"agones.dev/agones/pkg/util/runtime"
-	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 )
+
+// readHeaderTimeout bounds how long a client may take to send its request
+// headers, so a Slowloris client cannot hold the listener open indefinitely.
+const readHeaderTimeout = 60 * time.Second
+
+var errs = errors.FromPackage()
 
 // Server is a HTTPs server that conforms to the runner interface
 // we use in /cmd/controller.
@@ -43,9 +50,14 @@ func (s *Server) Run(ctx context.Context, _ int) error {
 		s.Port = "8080"
 	}
 	srv := &http.Server{
-		Addr:    ":" + s.Port,
-		Handler: s,
+		Addr:              ":" + s.Port,
+		Handler:           s,
+		ReadHeaderTimeout: readHeaderTimeout,
 	}
+	// context.Background() rather than ctx: ctx is already cancelled by the time
+	// the goroutine wakes, and Shutdown treats a done context as "stop waiting
+	// for in-flight requests and close now", defeating the graceful drain.
+	//nolint:gosec // G118: deliberate, see above.
 	go func() {
 		<-ctx.Done()
 		_ = srv.Shutdown(context.Background())
@@ -55,7 +67,7 @@ func (s *Server) Run(ctx context.Context, _ int) error {
 		if err == http.ErrServerClosed {
 			s.Logger.WithError(err).Info("http server closed")
 		} else {
-			wrappedErr := errors.Wrap(err, "Could not listen on :"+s.Port)
+			wrappedErr := errs.Wrap(err, "Could not listen on :"+s.Port)
 			runtime.HandleError(s.Logger.WithError(wrappedErr), wrappedErr)
 		}
 	}

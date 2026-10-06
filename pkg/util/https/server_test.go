@@ -45,20 +45,19 @@ func TestServerRun(t *testing.T) {
 	ts := &testServer{server: httptest.NewUnstartedServer(s.Mux)}
 	s.tls = ts
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	err := s.Run(ctx, 0)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	client := ts.server.Client()
 	resp, err := client.Get(ts.server.URL + "/test")
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	defer resp.Body.Close() // nolint: errcheck
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 
 	resp, err = client.Get(ts.server.URL + "/")
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	defer resp.Body.Close() // nolint: errcheck
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }

@@ -47,10 +47,22 @@ The following is the process for what happens to a `GameServer` when it is unhea
 
 1. The Pod is set to `restartPolicy: Never` by default.
 2. The SDK server sidecar container is set to `restartPolicy: Always`.
-3. If main containers within the Pod fail, the `GameServere` will move to an `Unhealthy` state.
-4. The SDK server sidecar container stays alive for the entire duration of the Pod, and therefore SDK functionality 
-   is always available.
-5. If the SDK sidecar fails, then it will be restarted, assuming the `restartPolicy` remains the default.
+3. If a main container within the Pod fails, the `GameServer` will move to an `Unhealthy` state.
+4. Assuming the Pod is `restartPolicy: Never`, a terminated game server container can never be restarted, so this happens as soon as the game server container exits with a non-zero exit code.
+If you declare these workloads in `containers` instead, a long-lived one will hold the Pod in the `Running` phase
+after the game server container has exited. Agones does not depend on the Pod phase for this: it watches the game
+server container directly, and will move the `GameServer` to `Unhealthy` on a non-zero exit code (rule 4) or to
+`Shutdown` on a clean exit (rule 5) as soon as the game server container terminates. The Pod's own phase, however,
+will no longer reflect the state of your game server, and the other containers keep running until the `GameServer`
+is shutdown.
+
+{{% alert title="Note" color="info" %}}
+Sidecar containers cannot reliably expose ports through Agones. The kubelet only passes `hostPort` mappings declared
+on regular `containers` to the CNI when the Pod sandbox is created, so a `hostPort` on an `initContainers` entry is
+not mapped by Kubernetes. If a supporting workload needs its own `GameServer` port, it has to stay in
+`containers`, and the behaviour described above applies. See the
+[Sidecar Containers]({{< ref "/docs/Reference/gameserver.md#sidecar-containers" >}}) reference for details.
+{{% /alert %}}
 
 ## Fleet Management of Unhealthy GameServers
 

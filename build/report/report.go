@@ -20,6 +20,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"html/template"
 	"log"
@@ -124,7 +125,7 @@ func main() {
 		log.Fatalf("failed to open report %v: %v", datePath, err)
 	}
 
-	redirPath := fmt.Sprintf("%s/index.html", outPath)
+	redirPath := outPath + "/index.html"
 	redirFile, err := os.OpenFile(redirPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
 		log.Fatalf("failed to open redirect %v: %v", redirPath, err)
@@ -148,7 +149,7 @@ func main() {
 	it := c.ListBuilds(ctx, req)
 	for {
 		resp, err := it.Next()
-		if err == iterator.Done {
+		if errors.Is(err, iterator.Done) {
 			break
 		}
 		if err != nil {

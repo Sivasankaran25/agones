@@ -140,8 +140,6 @@ func TestIsBeingDeleted(t *testing.T) {
 func TestGameServerApplyDefaults(t *testing.T) {
 	t.Parallel()
 
-	ten := int64(10)
-
 	defaultGameServerAnd := func(f func(gss *GameServerSpec)) GameServer {
 		gs := GameServer{
 			Spec: GameServerSpec{
@@ -205,15 +203,6 @@ func TestGameServerApplyDefaults(t *testing.T) {
 		"set basic defaults on a very simple gameserver": {
 			gameServer: defaultGameServerAnd(func(_ *GameServerSpec) {}),
 			expected:   wantDefaultAnd(func(_ *expected) {}),
-		},
-		"PlayerTracking=true": {
-			featureFlags: string(runtime.FeaturePlayerTracking) + "=true",
-			gameServer: defaultGameServerAnd(func(gss *GameServerSpec) {
-				gss.Players = &PlayersSpec{InitialCapacity: 10}
-			}),
-			expected: wantDefaultAnd(func(e *expected) {
-				e.alphaPlayerCapacity = &ten
-			}),
 		},
 		"CountsAndLists=true, Counters": {
 			featureFlags: string(runtime.FeatureCountsAndLists) + "=true",
@@ -1438,76 +1427,6 @@ func TestGameServerValidateFeatures(t *testing.T) {
 			},
 		},
 		{
-			description: "PlayerTracking is disabled, Players field specified",
-			feature:     fmt.Sprintf("%s=false", runtime.FeaturePlayerTracking),
-			gs: GameServer{
-				Spec: GameServerSpec{
-					Container: "testing",
-					Players:   &PlayersSpec{InitialCapacity: 10},
-					Template: corev1.PodTemplateSpec{
-						Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "testing", Image: "testing/image"}}},
-					},
-				},
-			},
-			want: field.ErrorList{
-				field.Forbidden(
-					field.NewPath("spec", "players"),
-					"Value cannot be set unless feature flag PlayerTracking is enabled",
-				),
-			},
-		},
-		{
-			description: "PlayerTracking is enabled, Players field specified",
-			feature:     fmt.Sprintf("%s=true", runtime.FeaturePlayerTracking),
-			gs: GameServer{
-				Spec: GameServerSpec{
-					Container: "testing",
-					Players:   &PlayersSpec{InitialCapacity: 10},
-					Template: corev1.PodTemplateSpec{
-						Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "testing", Image: "testing/image"}}},
-					},
-				},
-			},
-		},
-		{
-			description: "CountsAndLists is disabled, Counters field specified",
-			feature:     fmt.Sprintf("%s=false", runtime.FeatureCountsAndLists),
-			gs: GameServer{
-				Spec: GameServerSpec{
-					Container: "testing",
-					Counters:  map[string]CounterStatus{},
-					Template: corev1.PodTemplateSpec{
-						Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "testing", Image: "testing/image"}}},
-					},
-				},
-			},
-			want: field.ErrorList{
-				field.Forbidden(
-					field.NewPath("spec", "counters"),
-					"Value cannot be set unless feature flag CountsAndLists is enabled",
-				),
-			},
-		},
-		{
-			description: "CountsAndLists is disabled, Lists field specified",
-			feature:     fmt.Sprintf("%s=false", runtime.FeatureCountsAndLists),
-			gs: GameServer{
-				Spec: GameServerSpec{
-					Container: "testing",
-					Lists:     map[string]ListStatus{},
-					Template: corev1.PodTemplateSpec{
-						Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "testing", Image: "testing/image"}}},
-					},
-				},
-			},
-			want: field.ErrorList{
-				field.Forbidden(
-					field.NewPath("spec", "lists"),
-					"Value cannot be set unless feature flag CountsAndLists is enabled",
-				),
-			},
-		},
-		{
 			description: "CountsAndLists is enabled, Counters field specified",
 			feature:     fmt.Sprintf("%s=true", runtime.FeatureCountsAndLists),
 			gs: GameServer{
@@ -1571,7 +1490,7 @@ func TestGameServerPodNoErrors(t *testing.T) {
 	fixture.ApplyDefaults()
 
 	pod, err := fixture.Pod(fakeAPIHooks{})
-	assert.Nil(t, err, "Pod should not return an error")
+	assert.NoError(t, err, "Pod should not return an error")
 	assert.Equal(t, fixture.ObjectMeta.Name, pod.ObjectMeta.Name)
 	assert.Equal(t, fixture.ObjectMeta.Name, pod.Spec.Hostname)
 	assert.Equal(t, fixture.ObjectMeta.Namespace, pod.ObjectMeta.Namespace)
@@ -1629,8 +1548,8 @@ func TestGameServerPodContainerNotFoundErrReturned(t *testing.T) {
 	}
 
 	_, err := fixture.Pod(fakeAPIHooks{})
-	if assert.NotNil(t, err, "Pod should return an error") {
-		assert.Equal(t, "failed to find container named Container1 in pod spec", err.Error())
+	if assert.Error(t, err, "Pod should return an error") {
+		assert.ErrorContains(t, err, "failed to find container named Container1 in pod spec")
 	}
 }
 
@@ -1646,7 +1565,7 @@ func TestGameServerPodWithSidecarNoErrors(t *testing.T) {
 	sidecar := corev1.Container{Name: "sidecar", Image: "container/sidecar"}
 	fixture.Spec.Template.Spec.ServiceAccountName = "other-agones-sdk"
 	pod, err := fixture.Pod(fakeAPIHooks{}, sidecar)
-	assert.Nil(t, err, "Pod should not return an error")
+	assert.NoError(t, err, "Pod should not return an error")
 	assert.Equal(t, fixture.ObjectMeta.Name, pod.ObjectMeta.Name)
 	assert.Len(t, pod.Spec.Containers, 2, "Should have two containers")
 	assert.Equal(t, "other-agones-sdk", pod.Spec.ServiceAccountName)
@@ -1667,7 +1586,7 @@ func TestGameServerPodWithInitSidecarNoErrors(t *testing.T) {
 	sidecar := corev1.Container{Name: "sidecar", Image: "container/sidecar"}
 	fixture.Spec.Template.Spec.ServiceAccountName = "other-agones-sdk"
 	pod, err := fixture.Pod(fakeAPIHooks{}, sidecar)
-	assert.Nil(t, err, "Pod should not return an error")
+	assert.NoError(t, err, "Pod should not return an error")
 	assert.Equal(t, fixture.ObjectMeta.Name, pod.ObjectMeta.Name)
 	assert.Len(t, pod.Spec.Containers, 1, "Should have one containers")
 	assert.Equal(t, "other-agones-sdk", pod.Spec.ServiceAccountName)
@@ -1675,7 +1594,7 @@ func TestGameServerPodWithInitSidecarNoErrors(t *testing.T) {
 	assert.Equal(t, corev1.ContainerRestartPolicyAlways, *pod.Spec.InitContainers[0].RestartPolicy)
 	assert.Equal(t, "container", pod.Spec.Containers[0].Name)
 	assert.True(t, metav1.IsControlledBy(pod, fixture))
-	assert.Equal(t, pod.Spec.RestartPolicy, corev1.RestartPolicyNever)
+	assert.Equal(t, corev1.RestartPolicyNever, pod.Spec.RestartPolicy)
 }
 
 func TestGameServerPodWithInitSidecarPrependsToExistingInitContainers(t *testing.T) {
@@ -1915,7 +1834,7 @@ func TestGameServerPatch(t *testing.T) {
 	delta.Spec.Container = "bear"
 
 	patch, err := fixture.Patch(delta)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	assert.Contains(t, string(patch), `{"op":"replace","path":"/spec/container","value":"bear"}`)
 	assert.Contains(t, string(patch), `{"op":"test","path":"/metadata/resourceVersion","value":"1234"}`)
@@ -1946,7 +1865,7 @@ func TestGameServerGetDevAddress(t *testing.T) {
 	regularGs.ObjectMeta.Annotations = map[string]string{}
 	devAddress, isDev = regularGs.GetDevAddress()
 	assert.False(t, isDev, "dev-game should NOT have a dev-address")
-	assert.Equal(t, "", devAddress, "dev-address IP address should be 127.1.1.1")
+	assert.Empty(t, devAddress, "dev-address IP address should be 127.1.1.1")
 }
 
 func TestGameServerIsDeletable(t *testing.T) {
@@ -2059,8 +1978,8 @@ func TestGameServerApplyToPodContainer(t *testing.T) {
 				return c
 			})
 
-			if tc.expected.err != "" && assert.NotNil(t, result) {
-				assert.Equal(t, tc.expected.err, result.Error())
+			if tc.expected.err != "" && assert.Error(t, result) {
+				assert.ErrorContains(t, result, tc.expected.err)
 			}
 			assert.Equal(t, tc.expected.tty, pod.Spec.Containers[0].TTY)
 			assert.False(t, pod.Spec.Containers[1].TTY)
@@ -2315,11 +2234,12 @@ func TestGameServerUpdateListCapacity(t *testing.T) {
 	t.Parallel()
 
 	testCases := map[string]struct {
-		gs       GameServer
-		name     string
-		capacity int64
-		want     ListStatus
-		wantErr  bool
+		gs          GameServer
+		name        string
+		capacity    int64
+		maxCapacity int64
+		want        ListStatus
+		wantErr     bool
 	}{
 		"list not in game server no-op with error": {
 			gs: GameServer{Status: GameServerStatus{
@@ -2330,9 +2250,10 @@ func TestGameServerUpdateListCapacity(t *testing.T) {
 					},
 				},
 			}},
-			name:     "thing",
-			capacity: 1000,
-			wantErr:  true,
+			name:        "thing",
+			capacity:    1000,
+			maxCapacity: 1000,
+			wantErr:     true,
 		},
 		"update list capacity": {
 			gs: GameServer{Status: GameServerStatus{
@@ -2343,8 +2264,9 @@ func TestGameServerUpdateListCapacity(t *testing.T) {
 					},
 				},
 			}},
-			name:     "things",
-			capacity: 1000,
+			name:        "things",
+			capacity:    1000,
+			maxCapacity: 1000,
 			want: ListStatus{
 				Values:   []string{},
 				Capacity: 1000,
@@ -2360,8 +2282,9 @@ func TestGameServerUpdateListCapacity(t *testing.T) {
 					},
 				},
 			}},
-			name:     "slings",
-			capacity: 10000,
+			name:        "slings",
+			capacity:    10000,
+			maxCapacity: 1000,
 			want: ListStatus{
 				Values:   []string{},
 				Capacity: 100,
@@ -2377,11 +2300,48 @@ func TestGameServerUpdateListCapacity(t *testing.T) {
 					},
 				},
 			}},
-			name:     "flings",
-			capacity: -100,
+			name:        "flings",
+			capacity:    -100,
+			maxCapacity: 1000,
 			want: ListStatus{
 				Values:   []string{},
 				Capacity: 999,
+			},
+			wantErr: true,
+		},
+		"capacity within a configured max below the old hardcoded 1000": {
+			gs: GameServer{Status: GameServerStatus{
+				Lists: map[string]ListStatus{
+					"things": {
+						Values:   []string{},
+						Capacity: 5,
+					},
+				},
+			}},
+			name:        "things",
+			capacity:    25,
+			maxCapacity: 25,
+			want: ListStatus{
+				Values:   []string{},
+				Capacity: 25,
+			},
+			wantErr: false,
+		},
+		"capacity above a configured max below the old hardcoded 1000 no-op with error": {
+			gs: GameServer{Status: GameServerStatus{
+				Lists: map[string]ListStatus{
+					"things": {
+						Values:   []string{},
+						Capacity: 5,
+					},
+				},
+			}},
+			name:        "things",
+			capacity:    26,
+			maxCapacity: 25,
+			want: ListStatus{
+				Values:   []string{},
+				Capacity: 5,
 			},
 			wantErr: true,
 		},
@@ -2389,7 +2349,7 @@ func TestGameServerUpdateListCapacity(t *testing.T) {
 
 	for test, testCase := range testCases {
 		t.Run(test, func(t *testing.T) {
-			err := testCase.gs.UpdateListCapacity(testCase.name, testCase.capacity)
+			err := testCase.gs.UpdateListCapacity(testCase.name, testCase.capacity, testCase.maxCapacity)
 			if err != nil {
 				assert.True(t, testCase.wantErr)
 			} else {

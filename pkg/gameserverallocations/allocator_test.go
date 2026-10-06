@@ -42,6 +42,9 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
+// defaultTestListMaxCapacity mirrors the `gameservers.lists.maxItems` Helm default.
+const defaultTestListMaxCapacity = int64(1000)
+
 func TestAllocatorAllocate(t *testing.T) {
 	t.Parallel()
 
@@ -93,7 +96,7 @@ func TestAllocatorAllocate(t *testing.T) {
 		}}
 	gsa.ApplyDefaults()
 	errs := gsa.Validate()
-	require.Len(t, errs, 0)
+	require.Empty(t, errs)
 
 	gs, err := a.allocate(ctx, &gsa)
 	require.NoError(t, err)
@@ -175,7 +178,7 @@ func TestAllocatorAllocatePriority(t *testing.T) {
 			}}
 		gsa.ApplyDefaults()
 		errs := gsa.Validate()
-		require.Len(t, errs, 0)
+		require.Empty(t, errs)
 
 		t.Run(name, func(t *testing.T) {
 			test(t, a, gsa.DeepCopy())
@@ -254,6 +257,7 @@ func TestAllocatorApplyAllocationToGameServer(t *testing.T) {
 		m.AgonesClient.AgonesV1(), m.KubeClient,
 		NewAllocationCache(m.AgonesInformerFactory.Agones().V1().GameServers(), gameservers.NewPerNodeCounter(m.KubeInformerFactory, m.AgonesInformerFactory), healthcheck.NewHandler()),
 		time.Second, 5*time.Second, 500*time.Millisecond,
+		defaultTestListMaxCapacity,
 	)
 
 	gs, err := allocator.applyAllocationToGameServer(ctx, allocationv1.MetaPatch{}, &agonesv1.GameServer{}, &allocationv1.GameServerAllocation{})
@@ -297,6 +301,7 @@ func TestAllocatorApplyAllocationToGameServerCountsListsActions(t *testing.T) {
 		m.AgonesClient.AgonesV1(), m.KubeClient,
 		NewAllocationCache(m.AgonesInformerFactory.Agones().V1().GameServers(), gameservers.NewPerNodeCounter(m.KubeInformerFactory, m.AgonesInformerFactory), healthcheck.NewHandler()),
 		time.Second, 5*time.Second, 500*time.Millisecond,
+		defaultTestListMaxCapacity,
 	)
 
 	ONE := int64(1)
@@ -441,6 +446,7 @@ func TestAllocationApplyAllocationError(t *testing.T) {
 		m.AgonesClient.AgonesV1(), m.KubeClient,
 		NewAllocationCache(m.AgonesInformerFactory.Agones().V1().GameServers(), gameservers.NewPerNodeCounter(m.KubeInformerFactory, m.AgonesInformerFactory), healthcheck.NewHandler()),
 		time.Second, 5*time.Second, 500*time.Millisecond,
+		defaultTestListMaxCapacity,
 	)
 
 	gsa, err := allocator.applyAllocationToGameServer(ctx, allocationv1.MetaPatch{}, &agonesv1.GameServer{}, &allocationv1.GameServerAllocation{})
@@ -479,7 +485,7 @@ func TestAllocatorAllocateOnGameServerUpdateError(t *testing.T) {
 	// wait for all the gameservers to be in the cache
 	require.Eventuallyf(t, func() bool {
 		return a.allocationCache.cache.Len() == gsLen
-	}, 10*time.Second, time.Second, fmt.Sprintf("should be %d items in the cache", gsLen))
+	}, 10*time.Second, time.Second, "should be %d items in the cache", gsLen)
 
 	gsa := allocationv1.GameServerAllocation{ObjectMeta: metav1.ObjectMeta{Name: "gsa-1", Namespace: defaultNs},
 		Spec: allocationv1.GameServerAllocationSpec{},
@@ -489,7 +495,7 @@ func TestAllocatorAllocateOnGameServerUpdateError(t *testing.T) {
 	// without converter, we don't end up with at least one selector
 	gsa.Converter()
 	errs := gsa.Validate()
-	require.Len(t, errs, 0)
+	require.Empty(t, errs)
 	require.Len(t, gsa.Spec.Selectors, 1)
 
 	// try the private method
@@ -504,7 +510,7 @@ func TestAllocatorAllocateOnGameServerUpdateError(t *testing.T) {
 	// wait for all the gameservers to be in the cache
 	require.Eventuallyf(t, func() bool {
 		return a.allocationCache.cache.Len() == gsLen
-	}, 10*time.Second, time.Second, fmt.Sprintf("should be %d items in the cache", gsLen))
+	}, 10*time.Second, time.Second, "should be %d items in the cache", gsLen)
 
 	// try the public method
 	result, err := a.Allocate(ctx, gsa.DeepCopy())
@@ -544,10 +550,10 @@ func TestAllocatorRunLocalAllocations(t *testing.T) {
 
 		// This call initializes the cache
 		err := a.allocationCache.syncCache()
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 
 		err = a.allocationCache.counter.Run(ctx, 0)
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 
 		gsa := &allocationv1.GameServerAllocation{
 			ObjectMeta: metav1.ObjectMeta{
@@ -558,7 +564,7 @@ func TestAllocatorRunLocalAllocations(t *testing.T) {
 			}}
 		gsa.ApplyDefaults()
 		errs := gsa.Validate()
-		require.Len(t, errs, 0)
+		require.Empty(t, errs)
 
 		// line up 3 in a batch
 		j1 := request{gsa: gsa.DeepCopy(), response: make(chan response, 1), ctx: context.Background()}
@@ -601,10 +607,10 @@ func TestAllocatorRunLocalAllocations(t *testing.T) {
 
 		// This call initializes the cache
 		err := a.allocationCache.syncCache()
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 
 		err = a.allocationCache.counter.Run(ctx, 0)
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 
 		gsa := &allocationv1.GameServerAllocation{
 			ObjectMeta: metav1.ObjectMeta{
@@ -615,7 +621,7 @@ func TestAllocatorRunLocalAllocations(t *testing.T) {
 			}}
 		gsa.ApplyDefaults()
 		errs := gsa.Validate()
-		require.Len(t, errs, 0)
+		require.Empty(t, errs)
 
 		j1 := request{gsa: gsa.DeepCopy(), response: make(chan response, 1), ctx: context.Background()}
 		a.pendingRequests <- j1
@@ -635,10 +641,10 @@ func TestAllocatorRunLocalAllocations(t *testing.T) {
 
 		// This call initializes the cache
 		err := a.allocationCache.syncCache()
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 
 		err = a.allocationCache.counter.Run(ctx, 0)
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 
 		gsa := &allocationv1.GameServerAllocation{
 			ObjectMeta: metav1.ObjectMeta{
@@ -649,7 +655,7 @@ func TestAllocatorRunLocalAllocations(t *testing.T) {
 			}}
 		gsa.ApplyDefaults()
 		errs := gsa.Validate()
-		require.Len(t, errs, 0)
+		require.Empty(t, errs)
 
 		reqCtx, reqCancel := context.WithTimeout(context.Background(), time.Millisecond)
 		reqCancel()
@@ -734,10 +740,10 @@ func TestAllocatorRunLocalAllocationsCountsAndLists(t *testing.T) {
 
 	// This call initializes the cache
 	err := a.allocationCache.syncCache()
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	err = a.allocationCache.counter.Run(ctx, 0)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	READY := agonesv1.GameServerStateReady
 
@@ -1117,7 +1123,7 @@ func TestAllocatorCreateRestClientError(t *testing.T) {
 			SecretName: "secret-name",
 		}
 		_, err := a.createRemoteClusterDialOption(defaultNs, connectionInfo)
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 	})
 }
 
@@ -1134,7 +1140,8 @@ func newFakeAllocator() (*Allocator, agtesting.Mocks) {
 		NewAllocationCache(m.AgonesInformerFactory.Agones().V1().GameServers(), counter, healthcheck.NewHandler()),
 		time.Second,
 		5*time.Second,
-		500*time.Millisecond)
+		500*time.Millisecond,
+		defaultTestListMaxCapacity)
 	a.recorder = m.FakeRecorder
 
 	return a, m

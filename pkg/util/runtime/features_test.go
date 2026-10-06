@@ -38,7 +38,7 @@ func TestFeatures(t *testing.T) {
 
 	t.Run("invalid Feature gate", func(t *testing.T) {
 		err := ParseFeatures("Foo")
-		assert.EqualError(t, err, "Feature Gate \"Foo\" is not a valid Feature Gate")
+		assert.ErrorContains(t, err, "Feature Gate \"Foo\" is not a valid Feature Gate")
 	})
 
 	t.Run("Empty query string", func(t *testing.T) {
@@ -66,6 +66,10 @@ func TestFeatures(t *testing.T) {
 	})
 
 	t.Run("parse env vars", func(t *testing.T) {
+		// t.Setenv would panic here: it is disallowed once the test or any
+		// ancestor has called t.Parallel, and TestFeatures does. Concurrent
+		// feature-gate mutation is held off by FeatureTestMutex instead.
+		//nolint:usetesting // see above
 		assert.NoError(t, os.Setenv("FEATURE_GATES", "Test=true"))
 
 		FeaturesBindFlags()

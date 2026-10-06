@@ -37,7 +37,7 @@ func TestBatchWatch(t *testing.T) {
 		case eventOut <- struct{}{}:
 			// capacity
 		default:
-			assert.FailNow(t, "second event written - did not want")
+			assert.Fail(t, "second event written - did not want")
 		}
 	}, func(error) {
 		errorCount++
@@ -53,12 +53,12 @@ func TestBatchWatch(t *testing.T) {
 		assert.Equal(t, wantErrors, errorCount)
 	}
 
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		eventChan <- fsnotify.Event{}
 	}
 	drainEventAndErrors(0)
 
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		errorChan <- errors.New("some error")
 		eventChan <- fsnotify.Event{}
 	}

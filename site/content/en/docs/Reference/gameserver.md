@@ -73,14 +73,6 @@ spec:
     # conflict with other TCP connections.
     grpcPort: 9357
     httpPort: 9358
-  # [Stage:Alpha]
-  # [FeatureFlag:PlayerTracking]
-  # Players provides the configuration for player tracking features.
-  # Commented out since Alpha, and disabled by default
-  # players:
-  #   # set this GameServer's initial player capacity
-  #   initialCapacity: 10
-  #
   # [Stage:Beta]
   # [FeatureFlag:CountsAndLists]
   # Counts and Lists provides the configuration for generic (player, room, session, etc.) tracking features.
@@ -147,7 +139,6 @@ The `spec` field is the actual GameServer specification and it is composed as fo
     - "Trace" The SDK server will output all messages, including detailed tracing information
   - `grpcPort` the port that the SDK Server binds to for gRPC connections
   - `httpPort` the port that the SDK Server binds to for HTTP gRPC gateway connections
-- `players` (Alpha, behind "PlayerTracking" feature gate), sets this GameServer's initial player capacity
 - `counters` (Beta, requires "CountsAndLists" feature flag) are int64 counters with a default capacity of 1000 that can be incremented and decremented by set amounts. Keys must be declared at GameServer creation time. Note that setting the capacity to max(int64) may lead to issues.
 - `lists` (Beta, requires "CountsAndLists" feature flag) are lists of values stored against this GameServer that can be added and deleted from. Key must be declared at GameServer creation time.
 - `template` the [pod spec template]({{% k8s-api-version href="#podtemplatespec-v1-core" %}}) to run your GameServer containers, [see](https://kubernetes.io/docs/concepts/workloads/pods/pod-overview/#pod-templates) for more information.
@@ -172,9 +163,14 @@ Agones supports the use of [Sidecar Containers](https://kubernetes.io/docs/conce
 This requires the `RestartPolicy` to be set to `Always` and can be referenced in the `ports.*.container` field. Typically they used to run
 services that need to run alongside the GameServer container, such as log shippers, monitoring agents, allocators and other supporting services.
 
-{{< alert title="Warning" color="warning">}}
-Some CNIs (Container Network Interface) may not support the use of init containers with host ports. Please check CNI for compatibility.
-{{< /alert >}}
+{{% alert title="Warning" color="warning" %}}
+Whether a port on a sidecar container is reachable depends on your CNI (Container Network Interface). When the
+kubelet creates the Pod sandbox it only passes the `hostPort` mappings declared on regular `containers` to the CNI, so
+with the standard `portmap` plugin a `hostPort` on an `initContainers` entry is unreachable, even though the
+`GameServer` reports it as allocated. It only works on CNIs that read the Pod spec themselves to implement `hostPort`.
+Check your CNI for compatibility before relying on this, and otherwise keep any container that needs a `GameServer`
+port in `containers`.
+{{% /alert %}}
 
 ## Stable Network ID
 

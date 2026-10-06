@@ -16,8 +16,10 @@ package e2e
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -101,11 +103,12 @@ func TestFleetStrategyValidation(t *testing.T) {
 	assert.NoError(t, err)
 	// func to check that we receive an expected error
 	verifyErr := func(err error) {
-		assert.NotNil(t, err)
-		statusErr, ok := err.(*k8serrors.StatusError)
+		require.Error(t, err)
+		var statusErr *k8serrors.StatusError
+		ok := errors.As(err, &statusErr)
 		assert.True(t, ok)
 		fmt.Println(statusErr)
-		assert.Len(t, statusErr.Status().Details.Causes, 1)
+		require.Len(t, statusErr.Status().Details.Causes, 1)
 		assert.Equal(t, metav1.CauseTypeFieldValueNotSupported, statusErr.Status().Details.Causes[0].Type)
 		assert.Contains(t, statusErr.Status().Details.Causes[0].Message, `supported values: "RollingUpdate", "Recreate"`)
 	}
@@ -300,7 +303,7 @@ func TestFleetScaleUpEditAndScaleDown(t *testing.T) {
 	fixtures := []bool{true, false}
 
 	for _, usePatch := range fixtures {
-		t.Run("Use fleet Patch "+fmt.Sprint(usePatch), func(t *testing.T) {
+		t.Run("Use fleet Patch "+strconv.FormatBool(usePatch), func(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()
 
@@ -629,7 +632,7 @@ func TestScaleFleetUpAndDownWithGameServerAllocation(t *testing.T) {
 	fixtures := []bool{false, true}
 
 	for _, usePatch := range fixtures {
-		t.Run("Use fleet Patch "+fmt.Sprint(usePatch), func(t *testing.T) {
+		t.Run("Use fleet Patch "+strconv.FormatBool(usePatch), func(t *testing.T) {
 			t.Parallel()
 
 			client := framework.AgonesClient.AgonesV1()
@@ -912,8 +915,9 @@ func TestFleetGSSpecValidation(t *testing.T) {
 		}
 	flt.Spec.Template.Spec.Container = "testing"
 	_, err := client.Fleets(framework.Namespace).Create(ctx, flt, metav1.CreateOptions{})
-	assert.NotNil(t, err)
-	statusErr, ok := err.(*k8serrors.StatusError)
+	assert.Error(t, err)
+	var statusErr *k8serrors.StatusError
+	ok := errors.As(err, &statusErr)
 	assert.True(t, ok)
 
 	assert.Len(t, statusErr.Status().Details.Causes, 2)
@@ -924,8 +928,8 @@ func TestFleetGSSpecValidation(t *testing.T) {
 
 	flt.Spec.Template.Spec.Container = ""
 	_, err = client.Fleets(framework.Namespace).Create(ctx, flt, metav1.CreateOptions{})
-	assert.NotNil(t, err)
-	statusErr, ok = err.(*k8serrors.StatusError)
+	assert.Error(t, err)
+	ok = errors.As(err, &statusErr)
 	assert.True(t, ok)
 	if assert.Len(t, statusErr.Status().Details.Causes, 2) {
 		assert.Equal(t, metav1.CauseTypeFieldValueInvalid, statusErr.Status().Details.Causes[1].Type)
@@ -946,8 +950,8 @@ func TestFleetGSSpecValidation(t *testing.T) {
 	fltPort.Spec.Template.Spec.Ports = []agonesv1.GameServerPort{{Name: "Dyn", HostPort: 5555, PortPolicy: agonesv1.Dynamic, ContainerPort: 5555}}
 
 	_, err = client.Fleets(framework.Namespace).Create(ctx, fltPort, metav1.CreateOptions{})
-	assert.NotNil(t, err)
-	statusErr, ok = err.(*k8serrors.StatusError)
+	assert.Error(t, err)
+	ok = errors.As(err, &statusErr)
 	assert.True(t, ok)
 	assert.Len(t, statusErr.Status().Details.Causes, 1)
 	assert.Contains(t, statusErr.Status().Details.Causes[0].Message, agonesv1.ErrHostPort)
@@ -969,9 +973,10 @@ func TestFleetNameValidation(t *testing.T) {
 	nameLen := validation.LabelValueMaxLength + 1
 	flt.Name = strings.Repeat("f", nameLen)
 	_, err := client.Fleets(framework.Namespace).Create(ctx, flt, metav1.CreateOptions{})
-	require.NotNil(t, err)
-	statusErr := err.(*k8serrors.StatusError)
-	assert.True(t, len(statusErr.Status().Details.Causes) > 0)
+	require.Error(t, err)
+	var statusErr *k8serrors.StatusError
+	require.ErrorAs(t, err, &statusErr)
+	assert.NotEmpty(t, statusErr.Status().Details.Causes)
 	assert.Equal(t, metav1.CauseType("FieldValueTooLong"), statusErr.Status().Details.Causes[0].Type)
 	goodFlt := defaultFleet(framework.Namespace)
 	goodFlt.Name = flt.Name[0 : nameLen-1]
@@ -981,6 +986,7 @@ func TestFleetNameValidation(t *testing.T) {
 }
 
 func assertSuccessOrUpdateConflict(t *testing.T, err error) {
+	t.Helper()
 	if !k8serrors.IsConflict(err) {
 		// update conflicts are sometimes ok, we simply lost the race.
 		require.NoError(t, err)
@@ -1329,7 +1335,8 @@ func TestFleetWithLongLabelsAnnotations(t *testing.T) {
 	flt.Spec.Template.ObjectMeta.Labels["label"] = longName
 	_, err := client.Fleets(framework.Namespace).Create(ctx, flt, metav1.CreateOptions{})
 	assert.Error(t, err)
-	statusErr, ok := err.(*k8serrors.StatusError)
+	var statusErr *k8serrors.StatusError
+	ok := errors.As(err, &statusErr)
 	assert.True(t, ok)
 	assert.Len(t, statusErr.Status().Details.Causes, 1)
 	assert.Equal(t, metav1.CauseTypeFieldValueInvalid, statusErr.Status().Details.Causes[0].Type)
@@ -1341,7 +1348,7 @@ func TestFleetWithLongLabelsAnnotations(t *testing.T) {
 	flt.Spec.Template.ObjectMeta.Annotations[longName] = normalLengthName
 	_, err = client.Fleets(framework.Namespace).Create(ctx, flt, metav1.CreateOptions{})
 	assert.Error(t, err)
-	statusErr, ok = err.(*k8serrors.StatusError)
+	ok = errors.As(err, &statusErr)
 	assert.True(t, ok)
 	assert.Len(t, statusErr.Status().Details.Causes, 1)
 	assert.Equal(t, "spec.template.metadata.annotations", statusErr.Status().Details.Causes[0].Field)
@@ -1364,7 +1371,7 @@ func TestFleetWithLongLabelsAnnotations(t *testing.T) {
 	goodFlt.Spec.Template.ObjectMeta.Annotations[longName] = normalLengthName
 	_, err = client.Fleets(framework.Namespace).Update(ctx, goodFlt, metav1.UpdateOptions{})
 	assert.Error(t, err)
-	statusErr, ok = err.(*k8serrors.StatusError)
+	ok = errors.As(err, &statusErr)
 	assert.True(t, ok)
 	require.Len(t, statusErr.Status().Details.Causes, 1)
 	assert.Equal(t, "spec.template.metadata.annotations", statusErr.Status().Details.Causes[0].Field)
@@ -1518,8 +1525,9 @@ func TestFleetResourceValidation(t *testing.T) {
 	containers[1].Resources.Requests[corev1.ResourceMemory] = mi128
 
 	_, err := client.Fleets(framework.Namespace).Create(ctx, flt.DeepCopy(), metav1.CreateOptions{})
-	assert.NotNil(t, err)
-	statusErr, ok := err.(*k8serrors.StatusError)
+	assert.Error(t, err)
+	var statusErr *k8serrors.StatusError
+	ok := errors.As(err, &statusErr)
 	assert.True(t, ok)
 	assert.Len(t, statusErr.Status().Details.Causes, 1)
 	assert.Equal(t, metav1.CauseTypeFieldValueInvalid, statusErr.Status().Details.Causes[0].Type)
@@ -1527,8 +1535,8 @@ func TestFleetResourceValidation(t *testing.T) {
 
 	containers[0].Resources.Limits[corev1.ResourceCPU] = resource.MustParse("-50m")
 	_, err = client.Fleets(framework.Namespace).Create(ctx, flt.DeepCopy(), metav1.CreateOptions{})
-	assert.NotNil(t, err)
-	statusErr, ok = err.(*k8serrors.StatusError)
+	assert.Error(t, err)
+	ok = errors.As(err, &statusErr)
 	assert.True(t, ok)
 
 	assert.Len(t, statusErr.Status().Details.Causes, 3)
@@ -1549,77 +1557,6 @@ func TestFleetResourceValidation(t *testing.T) {
 	containers = flt.Spec.Template.Spec.Template.Spec.Containers
 	assert.Equal(t, mi128, containers[1].Resources.Limits[corev1.ResourceMemory])
 	assert.Equal(t, m50, containers[0].Resources.Limits[corev1.ResourceCPU])
-}
-
-func TestFleetAggregatedPlayerStatus(t *testing.T) {
-	if !runtime.FeatureEnabled(runtime.FeaturePlayerTracking) {
-		t.SkipNow()
-	}
-	t.Parallel()
-	ctx := context.Background()
-	client := framework.AgonesClient.AgonesV1()
-
-	flt := defaultFleet(framework.Namespace)
-	flt.Spec.Template.Spec.Players = &agonesv1.PlayersSpec{
-		InitialCapacity: 10,
-	}
-
-	flt, err := client.Fleets(framework.Namespace).Create(ctx, flt.DeepCopy(), metav1.CreateOptions{})
-	assert.NoError(t, err)
-
-	framework.AssertFleetCondition(t, flt, func(log *logrus.Entry, fleet *agonesv1.Fleet) bool {
-		if fleet.Status.Players == nil {
-			log.WithField("status", fleet.Status).Info("No Players")
-			return false
-		}
-
-		log.WithField("status", fleet.Status).Info("Checking Capacity")
-		return fleet.Status.Players.Capacity == 30
-	})
-
-	list, err := framework.ListGameServersFromFleet(flt)
-	assert.NoError(t, err)
-	// set 3 random capacities, and connect a random number of players
-	totalCapacity := 0
-	totalPlayers := 0
-	for i := range list {
-		// Do this, otherwise scopelint complains about "using a reference for the variable on range scope"
-		gs := &list[i]
-		players := rand.IntnRange(1, 5)
-		capacity := rand.IntnRange(players, 100)
-		totalCapacity += capacity
-
-		msg := fmt.Sprintf("PLAYER_CAPACITY %d", capacity)
-		reply, err := framework.SendGameServerUDP(t, gs, msg)
-		if err != nil {
-			t.Fatalf("Could not message GameServer: %v", err)
-		}
-		assert.Equal(t, fmt.Sprintf("ACK: %s\n", msg), reply)
-
-		totalPlayers += players
-		for i := 1; i <= players; i++ {
-			msg := "PLAYER_CONNECT " + fmt.Sprintf("%d", i)
-			logrus.WithField("msg", msg).WithField("gs", gs.ObjectMeta.Name).Info("Sending Player Connect")
-			// retry on failure. Will stop flakiness of UDP packets being sent/received.
-			err := wait.PollUntilContextTimeout(context.Background(), time.Second, 5*time.Minute, true, func(_ context.Context) (done bool, err error) {
-				reply, err := framework.SendGameServerUDP(t, gs, msg)
-				if err != nil {
-					logrus.WithError(err).Warn("error with udp packet")
-					return false, nil
-				}
-				assert.Equal(t, fmt.Sprintf("ACK: %s\n", msg), reply)
-				return true, nil
-			})
-			assert.NoError(t, err)
-		}
-	}
-
-	framework.AssertFleetCondition(t, flt, func(log *logrus.Entry, fleet *agonesv1.Fleet) bool {
-		log.WithField("players", fleet.Status.Players).WithField("totalCapacity", totalCapacity).
-			WithField("totalPlayers", totalPlayers).Info("Checking Capacity")
-		// since UDP packets might fail, we might get an extra player, so we'll check for that.
-		return (fleet.Status.Players.Capacity == int64(totalCapacity)) && (fleet.Status.Players.Count >= int64(totalPlayers))
-	})
 }
 
 func TestFleetAggregatedCounterStatus(t *testing.T) {
@@ -1889,6 +1826,7 @@ func TestFleetAllocationOverflow(t *testing.T) {
 }
 
 func assertCausesContainsString(t *testing.T, causes []metav1.StatusCause, expected string) {
+	t.Helper()
 	strs := make([]string, 0, len(causes))
 	for _, v := range causes {
 		strs = append(strs, v.Message)
@@ -1915,6 +1853,7 @@ func countFleetScheduling(gsList []agonesv1.GameServer, scheduling apis.Scheduli
 
 // Patches fleet with scheduling and scale values
 func schedulingFleetPatch(ctx context.Context, t *testing.T, f *agonesv1.Fleet, scheduling apis.SchedulingStrategy, scale int32) *agonesv1.Fleet {
+	t.Helper()
 
 	patch := fmt.Sprintf(`[{ "op": "replace", "path": "/spec/scheduling", "value": "%s" },
 	                       { "op": "replace", "path": "/spec/replicas", "value": %d }]`,
@@ -1936,6 +1875,7 @@ func schedulingFleetPatch(ctx context.Context, t *testing.T, f *agonesv1.Fleet, 
 }
 
 func scaleAndWait(ctx context.Context, t *testing.T, flt *agonesv1.Fleet, fleetSize int32) (duration time.Duration, err error) {
+	t.Helper()
 	t0 := time.Now()
 	scaleFleetSubresource(ctx, t, flt, fleetSize)
 	err = framework.WaitForFleetCondition(t, flt, e2e.FleetReadyCount(fleetSize))
@@ -1946,6 +1886,7 @@ func scaleAndWait(ctx context.Context, t *testing.T, flt *agonesv1.Fleet, fleetS
 // scaleFleetPatch creates a patch to apply to a Fleet.
 // Easier for testing, as it removes object generational issues.
 func scaleFleetPatch(ctx context.Context, t *testing.T, f *agonesv1.Fleet, scale int32) *agonesv1.Fleet {
+	t.Helper()
 	patch := fmt.Sprintf(`[{ "op": "replace", "path": "/spec/replicas", "value": %d }]`, scale)
 	logrus.WithField("fleet", f.ObjectMeta.Name).WithField("scale", scale).WithField("patch", patch).Info("Scaling fleet")
 
@@ -1957,6 +1898,7 @@ func scaleFleetPatch(ctx context.Context, t *testing.T, f *agonesv1.Fleet, scale
 // scaleFleetSubresource uses scale subresource to change Replicas size of the Fleet.
 // Returns the same f as in parameter, just to keep signature in sync with scaleFleetPatch
 func scaleFleetSubresource(ctx context.Context, t *testing.T, f *agonesv1.Fleet, scale int32) *agonesv1.Fleet {
+	t.Helper()
 	logrus.WithField("fleet", f.ObjectMeta.Name).WithField("scale", scale).Info("Scaling fleet")
 
 	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {

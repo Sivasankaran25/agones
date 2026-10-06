@@ -31,10 +31,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pkg/errors"
+	"agones.dev/agones/pkg/cloudproduct"
+	"agones.dev/agones/pkg/util/errors"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -86,13 +88,17 @@ type Framework struct {
 	Namespace       string
 	CloudProduct    string
 	WaitForState    time.Duration // default time to wait for state changes, may change based on cloud product.
+	errs            *errors.Errors
 }
 
 func newFramework(kubeconfig string, qps float32, burst int) (*Framework, error) {
+	f := &Framework{}
+	f.errs = errors.FromStruct(f)
+
 	logger := runtime.NewLoggerWithSource("framework")
 	config, err := runtime.InClusterBuildConfig(logger, kubeconfig)
 	if err != nil {
-		return nil, errors.Wrap(err, "build config from flags failed")
+		return nil, f.errs.Wrap(err, "build config from flags failed")
 	}
 
 	if qps > 0 {
@@ -104,18 +110,17 @@ func newFramework(kubeconfig string, qps float32, burst int) (*Framework, error)
 
 	kubeClient, err := kubernetes.NewForConfig(config)
 	if err != nil {
-		return nil, errors.Wrap(err, "creating new kube-client failed")
+		return nil, f.errs.Wrap(err, "creating new kube-client failed")
 	}
 
 	agonesClient, err := versioned.NewForConfig(config)
 	if err != nil {
-		return nil, errors.Wrap(err, "creating new agones-client failed")
+		return nil, f.errs.Wrap(err, "creating new agones-client failed")
 	}
 
-	return &Framework{
-		KubeClient:   kubeClient,
-		AgonesClient: agonesClient,
-	}, nil
+	f.KubeClient = kubeClient
+	f.AgonesClient = agonesClient
+	return f, nil
 }
 
 const (
@@ -158,7 +163,7 @@ func NewFromFlags() (*Framework, error) {
 	}
 
 	viper.SetDefault(kubeconfigFlag, filepath.Join(usr.HomeDir, ".kube", "config"))
-	viper.SetDefault(gsimageFlag, "us-docker.pkg.dev/agones-images/examples/simple-game-server:0.43")
+	viper.SetDefault(gsimageFlag, "us-docker.pkg.dev/agones-images/examples/simple-game-server:0.44")
 	viper.SetDefault(pullSecretFlag, "")
 	viper.SetDefault(stressTestLevelFlag, 0)
 	viper.SetDefault(perfOutputDirFlag, "")
@@ -203,7 +208,7 @@ func NewFromFlags() (*Framework, error) {
 	framework.Namespace = viper.GetString(namespaceFlag)
 	framework.CloudProduct = viper.GetString(cloudProductFlag)
 	framework.WaitForState = 5 * time.Minute
-	if framework.CloudProduct == "gke-autopilot" {
+	if framework.CloudProduct == cloudproduct.GkeAutopilotProduct {
 		// Autopilot can take a little while due to autoscaling, be a little liberal.
 		// Keeping it under 10m so we don't get stack track dumps at 10m as unit tests can't be extended past 10m.
 		framework.WaitForState = 8 * time.Minute
@@ -228,7 +233,7 @@ func (f *Framework) CreateGameServerAndWaitUntilReady(t *testing.T, ns string, g
 	log := TestLogger(t)
 	newGs, err := f.AgonesClient.AgonesV1().GameServers(ns).Create(context.Background(), gs, metav1.CreateOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("creating %v GameServer instances failed (%v): %v", gs.Spec, gs.Name, err)
+		return nil, fmt.Errorf("creating %v GameServer instances failed (%v): %w", gs.Spec, gs.Name, err)
 	}
 
 	log.WithField("gs", newGs.ObjectMeta.Name).Info("GameServer created, waiting for Ready")
@@ -236,7 +241,10 @@ func (f *Framework) CreateGameServerAndWaitUntilReady(t *testing.T, ns string, g
 	readyGs, err := f.WaitForGameServerState(t, newGs, agonesv1.GameServerStateReady, f.WaitForState)
 
 	if err != nil {
-		return readyGs, fmt.Errorf("waiting for %v GameServer instance readiness timed out (%v): %v",
+		if readyGs != nil {
+			f.LogEvents(t, log, ns, readyGs)
+		}
+		return readyGs, fmt.Errorf("waiting for %v GameServer instance readiness timed out (%v): %w",
 			gs.Spec, gs.Name, err)
 	}
 
@@ -286,7 +294,7 @@ func (f *Framework) WaitForGameServerState(t *testing.T, gs *agonesv1.GameServer
 			log.WithField("gs", checkGs.ObjectMeta.Name).
 				WithField("currentState", checkState).
 				WithField("awaitingState", state).Error("GameServer reached terminal state")
-			return false, errors.Errorf("GameServer reached terminal state %s", checkState)
+			return false, f.errs.Errorf("GameServer reached terminal state %s", checkState)
 		}
 		log.WithField("gs", checkGs.ObjectMeta.Name).
 			WithField("currentState", checkState).
@@ -295,7 +303,7 @@ func (f *Framework) WaitForGameServerState(t *testing.T, gs *agonesv1.GameServer
 		return false, nil
 	})
 
-	return checkGs, errors.Wrapf(err, "waiting for GameServer %v/%v to be %v",
+	return checkGs, f.errs.Wrapf(err, "waiting for GameServer %v/%v to be %v",
 		gs.Namespace, gs.Name, state)
 }
 
@@ -303,6 +311,7 @@ func (f *Framework) WaitForGameServerState(t *testing.T, gs *agonesv1.GameServer
 // Each Allocated GameServer gets deleted allocDuration after it was Allocated.
 // GameServers will continue to be Allocated until a message is passed to the done channel.
 func (f *Framework) CycleAllocations(ctx context.Context, t *testing.T, flt *agonesv1.Fleet, period time.Duration, allocDuration time.Duration) {
+	t.Helper()
 	err := wait.PollUntilContextCancel(ctx, period, true, func(_ context.Context) (bool, error) {
 		gsa := GetAllocation(flt)
 		gsa, err := f.AgonesClient.AllocationV1().GameServerAllocations(flt.Namespace).Create(context.Background(), gsa, metav1.CreateOptions{})
@@ -315,7 +324,7 @@ func (f *Framework) CycleAllocations(ctx context.Context, t *testing.T, flt *ago
 		go func(gsa *allocationv1.GameServerAllocation) {
 			time.Sleep(allocDuration)
 			err := f.AgonesClient.AgonesV1().GameServers(gsa.Namespace).Delete(context.Background(), gsa.Status.GameServerName, metav1.DeleteOptions{})
-			require.NoError(t, err)
+			assert.NoError(t, err)
 		}(gsa)
 
 		return false, nil
@@ -328,6 +337,7 @@ func (f *Framework) CycleAllocations(ctx context.Context, t *testing.T, flt *ago
 
 // ScaleFleet will scale a Fleet with retries to a specified replica size.
 func (f *Framework) ScaleFleet(t *testing.T, log *logrus.Entry, flt *agonesv1.Fleet, replicas int32) {
+	t.Helper()
 	fleets := f.AgonesClient.AgonesV1().Fleets(f.Namespace)
 	ctx := context.Background()
 
@@ -352,12 +362,14 @@ func (f *Framework) ScaleFleet(t *testing.T, log *logrus.Entry, flt *agonesv1.Fl
 
 // AssertFleetCondition waits for the Fleet to be in a specific condition or fails the test if the condition can't be met in 5 minutes.
 func (f *Framework) AssertFleetCondition(t *testing.T, flt *agonesv1.Fleet, condition func(*logrus.Entry, *agonesv1.Fleet) bool) {
+	t.Helper()
 	err := f.WaitForFleetCondition(t, flt, condition)
 	require.NoError(t, err, "error waiting for fleet condition on fleet: %v", flt.Name)
 }
 
 // WaitForFleetCondition waits for the Fleet to be in a specific condition or returns an error if the condition can't be met in 5 minutes.
 func (f *Framework) WaitForFleetCondition(t *testing.T, flt *agonesv1.Fleet, condition func(*logrus.Entry, *agonesv1.Fleet) bool) error {
+	t.Helper()
 	log := TestLogger(t).WithField("fleet", flt.Name)
 	log.Info("waiting for fleet condition")
 	err := wait.PollUntilContextTimeout(context.Background(), 2*time.Second, f.WaitForState, true, func(_ context.Context) (bool, error) {
@@ -394,6 +406,7 @@ func (f *Framework) WaitForFleetCondition(t *testing.T, flt *agonesv1.Fleet, con
 // WaitForFleetAutoScalerCondition waits for the FleetAutoscaler to be in a specific condition or fails the test if the condition can't be met in 2 minutes.
 // nolint: dupl
 func (f *Framework) WaitForFleetAutoScalerCondition(t *testing.T, fas *autoscaling.FleetAutoscaler, condition func(log *logrus.Entry, fas *autoscaling.FleetAutoscaler) bool) {
+	t.Helper()
 	log := TestLogger(t).WithField("fleetautoscaler", fas.Name)
 	log.Info("waiting for fleetautoscaler condition")
 	err := wait.PollUntilContextTimeout(context.Background(), 2*time.Second, 2*time.Minute, true, func(_ context.Context) (bool, error) {
@@ -521,6 +534,7 @@ func (f *Framework) CleanUp(ns string) error {
 
 // CreateAndApplyAllocation creates and applies an Allocation to a Fleet
 func (f *Framework) CreateAndApplyAllocation(t *testing.T, flt *agonesv1.Fleet) *allocationv1.GameServerAllocation {
+	t.Helper()
 	gsa := GetAllocation(flt)
 	gsa, err := f.AgonesClient.AllocationV1().GameServerAllocations(flt.ObjectMeta.Namespace).Create(context.Background(), gsa, metav1.CreateOptions{})
 	require.NoError(t, err)
@@ -532,8 +546,9 @@ func (f *Framework) CreateAndApplyAllocation(t *testing.T, flt *agonesv1.Fleet) 
 // finds the first udp port from the spec to send the message to,
 // returns error if no Ports were allocated
 func (f *Framework) SendGameServerUDP(t *testing.T, gs *agonesv1.GameServer, msg string) (string, error) {
+	t.Helper()
 	if len(gs.Status.Ports) == 0 {
-		return "", errors.New("Empty Ports array")
+		return "", f.errs.New("Empty Ports array")
 	}
 
 	// use first udp port
@@ -542,15 +557,16 @@ func (f *Framework) SendGameServerUDP(t *testing.T, gs *agonesv1.GameServer, msg
 			return f.SendGameServerUDPToPort(t, gs, p.Name, msg)
 		}
 	}
-	return "", errors.New("No UDP ports")
+	return "", f.errs.New("No UDP ports")
 }
 
 // SendGameServerUDPToPort sends a message to a gameserver at the named port and returns its reply
 // returns error if no Ports were allocated or a port of the specified name doesn't exist
 func (f *Framework) SendGameServerUDPToPort(t *testing.T, gs *agonesv1.GameServer, portName string, msg string) (string, error) {
+	t.Helper()
 	log := TestLogger(t)
 	if len(gs.Status.Ports) == 0 {
-		return "", errors.New("Empty Ports array")
+		return "", f.errs.New("Empty Ports array")
 	}
 	var port agonesv1.GameServerStatusPort
 	for _, p := range gs.Status.Ports {
@@ -572,6 +588,7 @@ func (f *Framework) SendGameServerUDPToPort(t *testing.T, gs *agonesv1.GameServe
 // SendUDP sends a message to an address, and returns its reply if
 // it returns one in 10 seconds. Will retry 5 times, in case UDP packets drop.
 func (f *Framework) SendUDP(t *testing.T, address, msg string) (string, error) {
+	t.Helper()
 	log := TestLogger(t).WithField("address", address)
 	b := make([]byte, 1024)
 	var n int
@@ -608,7 +625,7 @@ func (f *Framework) SendUDP(t *testing.T, address, msg string) (string, error) {
 	})
 
 	if err != nil {
-		return "", errors.Wrap(err, "timed out attempting to send UDP packet to address")
+		return "", f.errs.Wrap(err, "timed out attempting to send UDP packet to address")
 	}
 
 	return string(b[:n]), nil
@@ -617,45 +634,73 @@ func (f *Framework) SendUDP(t *testing.T, address, msg string) (string, error) {
 // SendGameServerTCP sends a message to a gameserver and returns its reply
 // finds the first tcp port from the spec to send the message to,
 // returns error if no Ports were allocated
-func SendGameServerTCP(gs *agonesv1.GameServer, msg string) (string, error) {
+func (f *Framework) SendGameServerTCP(gs *agonesv1.GameServer, msg string) (string, error) {
 	if len(gs.Status.Ports) == 0 {
-		return "", errors.New("Empty Ports array")
+		return "", f.errs.New("Empty Ports array")
 	}
 
 	// use first tcp port
 	for _, p := range gs.Spec.Ports {
 		if p.Protocol == corev1.ProtocolTCP {
-			return SendGameServerTCPToPort(gs, p.Name, msg)
+			return f.SendGameServerTCPToPort(gs, p.Name, msg)
 		}
 	}
-	return "", errors.New("No TCP ports")
+	return "", f.errs.New("No TCP ports")
 }
 
 // SendGameServerTCPToPort sends a message to a gameserver at the named port and returns its reply
 // returns error if no Ports were allocated or a port of the specified name doesn't exist
-func SendGameServerTCPToPort(gs *agonesv1.GameServer, portName string, msg string) (string, error) {
+func (f *Framework) SendGameServerTCPToPort(gs *agonesv1.GameServer, portName string, msg string) (string, error) {
 	if len(gs.Status.Ports) == 0 {
-		return "", errors.New("Empty Ports array")
+		return "", f.errs.New("Empty Ports array")
 	}
 	var port agonesv1.GameServerStatusPort
+	var found bool
 	for _, p := range gs.Status.Ports {
 		if p.Name == portName {
 			port = p
+			found = true
+			break
 		}
 	}
+	if !found {
+		return "", f.errs.Errorf("port %q not found in GameServer status", portName)
+	}
 	address := fmt.Sprintf("%s:%d", gs.Status.Address, port.Port)
-	return SendTCP(address, msg)
+	return f.SendTCP(address, msg)
 }
 
-// SendTCP sends a message to an address, and returns its reply if
-// it returns one in 30 seconds
-func SendTCP(address, msg string) (string, error) {
-	conn, err := net.Dial("tcp", address)
-	if err != nil {
-		return "", err
+// SendTCP connects to an address and sends it a message, returning the
+// reply. On GKE Autopilot, the initial dial is retried for up to 5 minutes,
+// since the network path (e.g. hostPort NAT/eBPF rules) can take a while to
+// become reachable right after a GameServer transitions to Ready; other
+// cloud products dial once, as they are not known to have this delay. Once
+// connected, the reply must arrive within 30 seconds or this returns an
+// error.
+func (f *Framework) SendTCP(address, msg string) (string, error) {
+	var conn net.Conn
+	if f.CloudProduct == cloudproduct.GkeAutopilotProduct {
+		err := wait.PollUntilContextTimeout(context.Background(), time.Second, 5*time.Minute, true, func(_ context.Context) (bool, error) {
+			var dialErr error
+			conn, dialErr = net.DialTimeout("tcp", address, 10*time.Second)
+			if dialErr != nil {
+				logrus.WithError(dialErr).WithField("address", address).Info("could not dial TCP address, retrying")
+				return false, nil
+			}
+			return true, nil
+		})
+		if err != nil {
+			return "", f.errs.Wrap(err, "timed out attempting to dial TCP address")
+		}
+	} else {
+		var err error
+		conn, err = net.DialTimeout("tcp", address, 10*time.Second)
+		if err != nil {
+			return "", err
+		}
 	}
 
-	if err := conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
+	if err := conn.SetDeadline(time.Now().Add(30 * time.Second)); err != nil {
 		return "", err
 	}
 
@@ -666,7 +711,7 @@ func SendTCP(address, msg string) (string, error) {
 	}()
 
 	// writes to the tcp connection
-	_, err = fmt.Fprintln(conn, msg)
+	_, err := fmt.Fprintln(conn, msg)
 	if err != nil {
 		return "", err
 	}
@@ -707,7 +752,7 @@ func (f *Framework) CreateNamespace(namespace string) error {
 		},
 	}
 	if _, err := kubeCore.Namespaces().Create(ctx, ns, options); err != nil {
-		return errors.Errorf("creating namespace %s failed: %s", namespace, err.Error())
+		return f.errs.Errorf("creating namespace %s failed: %s", namespace, err.Error())
 	}
 	logrus.Infof("Namespace %s is created", namespace)
 
@@ -718,7 +763,7 @@ func (f *Framework) CreateNamespace(namespace string) error {
 			Labels:    map[string]string{appLabelKey: agonesAppLabelValue},
 		},
 	}, options); err != nil {
-		err = errors.Errorf("creating ServiceAccount %s in namespace %s failed: %s", saName, namespace, err.Error())
+		err = f.errs.Errorf("creating ServiceAccount %s in namespace %s failed: %s", saName, namespace, err.Error())
 		_ = f.DeleteNamespace(namespace) // Use _ to ignore derr since we return err anyway
 		return err
 	}
@@ -739,7 +784,7 @@ func (f *Framework) CreateNamespace(namespace string) error {
 		},
 	}
 	if _, err := kubeRbac.Roles(namespace).Create(ctx, role, options); err != nil {
-		err = errors.Errorf("creating Role %s in namespace %s failed: %s", roleName, namespace, err.Error())
+		err = f.errs.Errorf("creating Role %s in namespace %s failed: %s", roleName, namespace, err.Error())
 		_ = f.DeleteNamespace(namespace)
 		return err
 	}
@@ -765,7 +810,7 @@ func (f *Framework) CreateNamespace(namespace string) error {
 		},
 	}
 	if _, err := kubeRbac.RoleBindings(namespace).Create(ctx, rb, options); err != nil {
-		err = errors.Errorf("creating RoleBinding for service account %q in namespace %q failed: %s", saName, namespace, err.Error())
+		err = f.errs.Errorf("creating RoleBinding for service account %q in namespace %q failed: %s", saName, namespace, err.Error())
 		_ = f.DeleteNamespace(namespace)
 		return err
 	}
@@ -805,7 +850,7 @@ func (f *Framework) DeleteNamespace(namespace string) error {
 	// Remove finalizers
 	pods, err := kubeCore.Pods(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return errors.Errorf("listing pods in namespace %s failed: %s", namespace, err)
+		return f.errs.Errorf("listing pods in namespace %s failed: %s", namespace, err)
 	}
 	for i := range pods.Items {
 		pod := &pods.Items[i]
@@ -817,13 +862,13 @@ func (f *Framework) DeleteNamespace(namespace string) error {
 			}}
 			payloadBytes, _ := json.Marshal(payload)
 			if _, err := kubeCore.Pods(namespace).Patch(ctx, pod.Name, types.JSONPatchType, payloadBytes, metav1.PatchOptions{}); err != nil {
-				return errors.Wrapf(err, "updating pod %s failed", pod.GetName())
+				return f.errs.Wrapf(err, "updating pod %s failed", pod.GetName())
 			}
 		}
 	}
 
 	if err := kubeCore.Namespaces().Delete(ctx, namespace, metav1.DeleteOptions{}); err != nil {
-		return errors.Wrapf(err, "deleting namespace %s failed", namespace)
+		return f.errs.Wrapf(err, "deleting namespace %s failed", namespace)
 	}
 	logrus.Infof("Namespace %s is deleted", namespace)
 	return nil
@@ -879,6 +924,7 @@ func (f *Framework) DefaultGameServer(namespace string) *agonesv1.GameServer {
 // LogEvents logs all the events for a given Kubernetes objects. Useful for debugging why something
 // went wrong.
 func (f *Framework) LogEvents(t *testing.T, log *logrus.Entry, namespace string, objOrRef k8sruntime.Object) {
+	t.Helper()
 	log.WithField("kind", objOrRef.GetObjectKind().GroupVersionKind().Kind).Info("Dumping Events:")
 	events, err := f.KubeClient.CoreV1().Events(namespace).SearchWithContext(context.Background(), scheme.Scheme, objOrRef)
 	require.NoError(t, err, "error searching for events")
@@ -891,6 +937,7 @@ func (f *Framework) LogEvents(t *testing.T, log *logrus.Entry, namespace string,
 // LogPodContainers takes a Pod as an argument and attempts to output the current and previous logs from each container
 // in that Pod It uses the framework's KubeClient to retrieve the logs and outputs them using the provided logger.
 func (f *Framework) LogPodContainers(t *testing.T, pod *corev1.Pod) {
+	t.Helper()
 	log := TestLogger(t)
 	log.WithField("pod", pod.Name).WithField("namespace", pod.Namespace).Info("Logs for Pod:")
 
@@ -919,8 +966,8 @@ func (f *Framework) LogPodContainers(t *testing.T, pod *corev1.Pod) {
 		}
 
 		log.Info("---Logs for container---")
-		lines := strings.Split(string(logBytes), "\n")
-		for _, line := range lines {
+		lines := strings.SplitSeq(string(logBytes), "\n")
+		for line := range lines {
 			if line == "" {
 				continue
 			}
@@ -942,6 +989,7 @@ func (f *Framework) LogPodContainers(t *testing.T, pod *corev1.Pod) {
 
 // SkipOnCloudProduct skips the test if the e2e was invoked with --cloud-product=<product>.
 func (f *Framework) SkipOnCloudProduct(t *testing.T, product, reason string) {
+	t.Helper()
 	if f.CloudProduct == product {
 		t.Skipf("skipping test on cloud product %s: %s", product, reason)
 	}

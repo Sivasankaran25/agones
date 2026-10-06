@@ -17,10 +17,10 @@ package v1
 import (
 	"errors"
 	"fmt"
+	"slices"
 
 	"agones.dev/agones/pkg/apis"
 	agonesv1 "agones.dev/agones/pkg/apis/agones/v1"
-	"agones.dev/agones/pkg/util/runtime"
 	"github.com/mitchellh/hashstructure/v2"
 	corev1 "k8s.io/api/core/v1"
 	apivalidation "k8s.io/apimachinery/pkg/api/validation"
@@ -212,14 +212,13 @@ func (s *GameServerSelector) ApplyDefaults() {
 		s.GameServerState = &state
 	}
 
-	if runtime.FeatureEnabled(runtime.FeatureCountsAndLists) {
-		if s.Counters == nil {
-			s.Counters = make(map[string]CounterSelector)
-		}
-		if s.Lists == nil {
-			s.Lists = make(map[string]ListSelector)
-		}
+	if s.Counters == nil {
+		s.Counters = make(map[string]CounterSelector)
 	}
+	if s.Lists == nil {
+		s.Lists = make(map[string]ListSelector)
+	}
+
 }
 
 // Matches checks to see if a GameServer matches a given GameServerSelector's criteria.
@@ -245,17 +244,15 @@ func (s *GameServerSelector) Matches(gs *agonesv1.GameServer) bool {
 		return false
 	}
 
-	if runtime.FeatureEnabled(runtime.FeatureCountsAndLists) {
-		// Only check for matches if there are CounterSelectors or ListSelectors
-		if len(s.Counters) != 0 {
-			if !s.matchCounters(gs) {
-				return false
-			}
+	// Only check for matches if there are CounterSelectors or ListSelectors
+	if len(s.Counters) != 0 {
+		if !s.matchCounters(gs) {
+			return false
 		}
-		if len(s.Lists) != 0 {
-			if !s.matchLists(gs) {
-				return false
-			}
+	}
+	if len(s.Lists) != 0 {
+		if !s.matchLists(gs) {
+			return false
 		}
 	}
 
@@ -288,7 +285,7 @@ func (s *GameServerSelector) matchCounters(gs *agonesv1.GameServer) bool {
 	return true
 }
 
-// CounterActions attempts to peform any actions from the CounterAction on the GameServer Counter.
+// CounterActions attempts to perform any actions from the CounterAction on the GameServer Counter.
 // Returns the errors of any actions that could not be performed.
 func (ca *CounterAction) CounterActions(counter string, gs *agonesv1.GameServer) error {
 	var errs error
@@ -307,12 +304,13 @@ func (ca *CounterAction) CounterActions(counter string, gs *agonesv1.GameServer)
 	return errs
 }
 
-// ListActions attempts to peform any actions from the ListAction on the GameServer List.
-// Returns a string list of any actions that could not be performed.
-func (la *ListAction) ListActions(list string, gs *agonesv1.GameServer) error {
+// ListActions attempts to perform any actions from the ListAction on the GameServer List.
+// maxCapacity bounds any capacity change, and comes from the `gameservers.lists.maxItems` Helm value.
+// Returns an error containing any actions that could not be performed.
+func (la *ListAction) ListActions(list string, gs *agonesv1.GameServer, maxCapacity int64) error {
 	var errs error
 	if la.Capacity != nil {
-		capErr := gs.UpdateListCapacity(list, *la.Capacity)
+		capErr := gs.UpdateListCapacity(list, *la.Capacity, maxCapacity)
 		if capErr != nil {
 			errs = errors.Join(errs, capErr)
 		}
@@ -352,13 +350,7 @@ func (s *GameServerSelector) matchLists(gs *agonesv1.GameServer) bool {
 		}
 		// Check if List contains ContainsValue (if a value has been specified)
 		if listSelector.ContainsValue != "" {
-			valueExists := false
-			for _, value := range listStatus.Values {
-				if value == listSelector.ContainsValue {
-					valueExists = true
-					break
-				}
-			}
+			valueExists := slices.Contains(listStatus.Values, listSelector.ContainsValue)
 			if !valueExists {
 				return false
 			}
@@ -380,20 +372,11 @@ func (s *GameServerSelector) Validate(fldPath *field.Path) field.ErrorList {
 		allErrs = append(allErrs, field.Invalid(fldPath.Child("gameServerState"), *s.GameServerState, "GameServerState must be either Allocated or Ready"))
 	}
 
-	if runtime.FeatureEnabled(runtime.FeatureCountsAndLists) {
-		if s.Counters != nil {
-			allErrs = append(allErrs, validateCounters(s.Counters, fldPath.Child("counters"))...)
-		}
-		if s.Lists != nil {
-			allErrs = append(allErrs, validateLists(s.Lists, fldPath.Child("lists"))...)
-		}
-	} else {
-		if s.Counters != nil {
-			allErrs = append(allErrs, field.Forbidden(fldPath.Child("counters"), "Feature CountsAndLists must be enabled"))
-		}
-		if s.Lists != nil {
-			allErrs = append(allErrs, field.Forbidden(fldPath.Child("lists"), "Feature CountsAndLists must be enabled"))
-		}
+	if s.Counters != nil {
+		allErrs = append(allErrs, validateCounters(s.Counters, fldPath.Child("counters"))...)
+	}
+	if s.Lists != nil {
+		allErrs = append(allErrs, validateLists(s.Lists, fldPath.Child("lists"))...)
 	}
 
 	return allErrs
@@ -585,28 +568,14 @@ func (gsa *GameServerAllocation) Validate() field.ErrorList {
 		allErrs = append(allErrs, gsa.Spec.Selectors[i].Validate(specPath.Child("selectors").Index(i))...)
 	}
 
-	if !runtime.FeatureEnabled(runtime.FeatureCountsAndLists) {
-		if gsa.Spec.Priorities != nil {
-			allErrs = append(allErrs, field.Forbidden(specPath.Child("priorities"), "Feature CountsAndLists must be enabled if Priorities is specified"))
-		}
-		if gsa.Spec.Counters != nil {
-			allErrs = append(allErrs, field.Forbidden(specPath.Child("counters"), "Feature CountsAndLists must be enabled if Counters is specified"))
-		}
-		if gsa.Spec.Lists != nil {
-			allErrs = append(allErrs, field.Forbidden(specPath.Child("lists"), "Feature CountsAndLists must be enabled if Lists is specified"))
-		}
+	if gsa.Spec.Priorities != nil {
+		allErrs = append(allErrs, validatePriorities(gsa.Spec.Priorities, specPath.Child("priorities"))...)
 	}
-
-	if runtime.FeatureEnabled(runtime.FeatureCountsAndLists) {
-		if gsa.Spec.Priorities != nil {
-			allErrs = append(allErrs, validatePriorities(gsa.Spec.Priorities, specPath.Child("priorities"))...)
-		}
-		if gsa.Spec.Counters != nil {
-			allErrs = append(allErrs, validateCounterActions(gsa.Spec.Counters, specPath.Child("counters"))...)
-		}
-		if gsa.Spec.Lists != nil {
-			allErrs = append(allErrs, validateListActions(gsa.Spec.Lists, specPath.Child("lists"))...)
-		}
+	if gsa.Spec.Counters != nil {
+		allErrs = append(allErrs, validateCounterActions(gsa.Spec.Counters, specPath.Child("counters"))...)
+	}
+	if gsa.Spec.Lists != nil {
+		allErrs = append(allErrs, validateListActions(gsa.Spec.Lists, specPath.Child("lists"))...)
 	}
 
 	allErrs = append(allErrs, gsa.Spec.MetaPatch.Validate(specPath.Child("metadata"))...)

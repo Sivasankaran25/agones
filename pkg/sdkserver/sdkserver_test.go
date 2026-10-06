@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -30,7 +29,6 @@ import (
 	agonesv1 "agones.dev/agones/pkg/apis/agones/v1"
 	"agones.dev/agones/pkg/gameserverallocations"
 	"agones.dev/agones/pkg/sdk"
-	"agones.dev/agones/pkg/sdk/alpha"
 	"agones.dev/agones/pkg/sdk/beta"
 	agtesting "agones.dev/agones/pkg/testing"
 	agruntime "agones.dev/agones/pkg/util/runtime"
@@ -51,9 +49,14 @@ import (
 	testclocks "k8s.io/utils/clock/testing"
 )
 
+// defaultTestListMaxCapacity mirrors the `gameservers.lists.maxItems` Helm default, which is what
+// the controller supplies to the sidecar via MAX_LIST_ITEMS in a real cluster.
+const defaultTestListMaxCapacity = int64(1000)
+
 // patchGameServer is a helper function for the AddReactor "patch" that creates and applies a patch
 // to a gameserver. Returns a patched copy and does not modify the original game server.
 func patchGameServer(t *testing.T, action k8stesting.Action, gs *agonesv1.GameServer) *agonesv1.GameServer {
+	t.Helper()
 	pa := action.(k8stesting.PatchAction)
 	patchJSON := pa.GetPatch()
 	patch, err := jsonpatch.DecodePatch(patchJSON)
@@ -121,9 +124,9 @@ func TestSidecarRun(t *testing.T) {
 		"label": {
 			f: func(sc *SDKServer, ctx context.Context) {
 				_, err := sc.SetLabel(ctx, &sdk.KeyValue{Key: "foo", Value: "value-foo"})
-				assert.Nil(t, err)
+				assert.NoError(t, err)
 				_, err = sc.SetLabel(ctx, &sdk.KeyValue{Key: "bar", Value: "value-bar"})
-				assert.Nil(t, err)
+				assert.NoError(t, err)
 			},
 			expected: expected{
 				labels: map[string]string{
@@ -134,9 +137,9 @@ func TestSidecarRun(t *testing.T) {
 		"annotation": {
 			f: func(sc *SDKServer, ctx context.Context) {
 				_, err := sc.SetAnnotation(ctx, &sdk.KeyValue{Key: "test-1", Value: "annotation-1"})
-				assert.Nil(t, err)
+				assert.NoError(t, err)
 				_, err = sc.SetAnnotation(ctx, &sdk.KeyValue{Key: "test-2", Value: "annotation-2"})
-				assert.Nil(t, err)
+				assert.NoError(t, err)
 			},
 			expected: expected{
 				annotations: map[string]string{
@@ -209,7 +212,7 @@ func TestSidecarRun(t *testing.T) {
 				return true, gsCopy, nil
 			})
 
-			sc, err := NewSDKServer("test", "default", m.KubeClient, m.AgonesClient, logrus.DebugLevel, 8080, 500*time.Millisecond)
+			sc, err := NewSDKServer("test", "default", m.KubeClient, m.AgonesClient, logrus.DebugLevel, 8080, 500*time.Millisecond, defaultTestListMaxCapacity)
 			stop := make(chan struct{})
 			defer close(stop)
 			ctx, cancel := context.WithCancel(context.Background())
@@ -219,20 +222,18 @@ func TestSidecarRun(t *testing.T) {
 			sc.informerFactory.Start(stop)
 			assert.True(t, cache.WaitForCacheSync(stop, sc.gameServerSynced))
 
-			assert.Nil(t, err)
+			assert.NoError(t, err)
 			sc.recorder = m.FakeRecorder
 			if v.clock != nil {
 				sc.clock = v.clock
 			}
 
 			wg := sync.WaitGroup{}
-			wg.Add(1)
 
-			go func() {
+			wg.Go(func() {
 				err := sc.Run(ctx)
-				assert.Nil(t, err)
-				wg.Done()
-			}()
+				assert.NoError(t, err)
+			})
 			v.f(sc, ctx)
 
 			select {
@@ -305,7 +306,7 @@ func TestSDKServerSyncGameServer(t *testing.T) {
 		t.Run(k, func(t *testing.T) {
 			m := agtesting.NewMocks()
 			sc, err := defaultSidecar(m)
-			assert.Nil(t, err)
+			assert.NoError(t, err)
 
 			sc.gsState = v.scData.gsState
 			sc.gsLabels = v.scData.gsLabels
@@ -338,14 +339,13 @@ func TestSDKServerSyncGameServer(t *testing.T) {
 				return false, gsCopy, nil
 			})
 
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
+			ctx := t.Context()
 			sc.informerFactory.Start(ctx.Done())
 			assert.True(t, cache.WaitForCacheSync(ctx.Done(), sc.gameServerSynced))
 			sc.gsWaitForSync.Done()
 
 			err = sc.syncGameServer(ctx, v.key)
-			assert.Nil(t, err)
+			assert.NoError(t, err)
 			assert.True(t, updated, "should have updated")
 		})
 	}
@@ -400,14 +400,13 @@ func TestSidecarUpdateState(t *testing.T) {
 				return true, nil, nil
 			})
 
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
+			ctx := t.Context()
 			sc.informerFactory.Start(ctx.Done())
 			assert.True(t, cache.WaitForCacheSync(ctx.Done(), sc.gameServerSynced))
 			sc.gsWaitForSync.Done()
 
 			err = sc.updateState(ctx)
-			assert.Nil(t, err)
+			assert.NoError(t, err)
 			assert.False(t, updated)
 		})
 	}
@@ -428,19 +427,17 @@ func TestSidecarHealthLastUpdated(t *testing.T) {
 	stream := newEmptyMockStream()
 
 	wg := sync.WaitGroup{}
-	wg.Add(1)
-	go func() {
+	wg.Go(func() {
 		err := sc.Health(stream)
-		assert.Nil(t, err)
-		wg.Done()
-	}()
+		assert.NoError(t, err)
+	})
 
 	// Test once with a single message
 	fc.Step(3 * time.Second)
 	stream.msgs <- &sdk.Empty{}
 
 	err = waitForMessage(sc)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	sc.healthMutex.RLock()
 	assert.Equal(t, sc.clock.Now().UTC().String(), sc.healthLastUpdated.String())
 	sc.healthMutex.RUnlock()
@@ -449,7 +446,7 @@ func TestSidecarHealthLastUpdated(t *testing.T) {
 	fc.Step(3 * time.Second)
 	stream.msgs <- &sdk.Empty{}
 	err = waitForMessage(sc)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	sc.healthMutex.RLock()
 	assert.Equal(t, sc.clock.Now().UTC().String(), sc.healthLastUpdated.String())
 	sc.healthMutex.RUnlock()
@@ -466,7 +463,7 @@ func TestSidecarUnhealthyMessage(t *testing.T) {
 	t.Parallel()
 
 	m := agtesting.NewMocks()
-	sc, err := NewSDKServer("test", "default", m.KubeClient, m.AgonesClient, logrus.DebugLevel, 8080, 500*time.Millisecond)
+	sc, err := NewSDKServer("test", "default", m.KubeClient, m.AgonesClient, logrus.DebugLevel, 8080, 500*time.Millisecond, defaultTestListMaxCapacity)
 	require.NoError(t, err)
 
 	gs := agonesv1.GameServer{
@@ -490,8 +487,7 @@ func TestSidecarUnhealthyMessage(t *testing.T) {
 		return true, gsCopy, nil
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	stop := make(chan struct{})
 	defer close(stop)
 
@@ -503,7 +499,7 @@ func TestSidecarUnhealthyMessage(t *testing.T) {
 
 	go func() {
 		err := sc.Run(ctx)
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 	}()
 
 	// manually push through an unhealthy state change
@@ -536,12 +532,10 @@ func TestSidecarHealthy(t *testing.T) {
 	stream := newEmptyMockStream()
 
 	wg := sync.WaitGroup{}
-	wg.Add(1)
-	go func() {
+	wg.Go(func() {
 		err := sc.Health(stream)
-		assert.Nil(t, err)
-		wg.Done()
-	}()
+		assert.NoError(t, err)
+	})
 
 	fixtures := map[string]struct {
 		timeAdd         time.Duration
@@ -561,7 +555,7 @@ func TestSidecarHealthy(t *testing.T) {
 			fc.SetTime(time.Now().UTC())
 			stream.msgs <- &sdk.Empty{}
 			err = waitForMessage(sc)
-			assert.Nil(t, err)
+			assert.NoError(t, err)
 
 			fc.Step(v.timeAdd)
 			sc.checkHealth()
@@ -606,7 +600,7 @@ func TestSidecarHealthy(t *testing.T) {
 
 		stream.msgs <- &sdk.Empty{}
 		err = waitForMessage(sc)
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 		fc.Step(10 * time.Second)
 		assert.True(t, sc.healthy())
 	})
@@ -617,7 +611,7 @@ func TestSidecarHealthy(t *testing.T) {
 
 func TestSidecarHTTPHealthCheck(t *testing.T) {
 	m := agtesting.NewMocks()
-	sc, err := NewSDKServer("test", "default", m.KubeClient, m.AgonesClient, logrus.DebugLevel, 8080, 500*time.Millisecond)
+	sc, err := NewSDKServer("test", "default", m.KubeClient, m.AgonesClient, logrus.DebugLevel, 8080, 500*time.Millisecond, defaultTestListMaxCapacity)
 	require.NoError(t, err)
 
 	now := time.Now().Add(time.Hour).UTC()
@@ -645,7 +639,7 @@ func TestSidecarHTTPHealthCheck(t *testing.T) {
 
 	go func() {
 		err := sc.Run(ctx)
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 		// gate
 		assert.Equal(t, 1*time.Second, sc.healthTimeout)
 		wg.Done()
@@ -720,8 +714,7 @@ func TestSDKServerWatchGameServer(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, sc.connectedStreams)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	sc.ctx = ctx
 	sc.informerFactory.Start(ctx.Done())
 
@@ -738,7 +731,7 @@ func TestSDKServerWatchGameServer(t *testing.T) {
 	stream := newGameServerMockStream()
 	asyncWatchGameServer(t, sc, stream)
 
-	require.Nil(t, waitConnectedStreamCount(sc, 1))
+	require.NoError(t, waitConnectedStreamCount(sc, 1))
 	require.Equal(t, stream, sc.connectedStreams[0])
 
 	// modify for 2nd event in watch stream
@@ -793,8 +786,7 @@ func TestSDKServerSendGameServerUpdate(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, sc.connectedStreams)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	sc.ctx = ctx
 	sc.informerFactory.Start(ctx.Done())
 
@@ -810,7 +802,7 @@ func TestSDKServerSendGameServerUpdate(t *testing.T) {
 
 	stream := newGameServerMockStream()
 	asyncWatchGameServer(t, sc, stream)
-	assert.Nil(t, waitConnectedStreamCount(sc, 1))
+	assert.NoError(t, waitConnectedStreamCount(sc, 1))
 
 	sc.sendGameServerUpdate(fixture)
 
@@ -873,14 +865,14 @@ func TestSDKServer_SendGameServerUpdateRemovesDisconnectedStream(t *testing.T) {
 	asyncWatchGameServer(t, sc, streamTwo)
 
 	// Verify that two streams are connected.
-	assert.Nil(t, waitConnectedStreamCount(sc, 2))
+	assert.NoError(t, waitConnectedStreamCount(sc, 2))
 	streamOneCancel()
 	streamTwoCancel()
 
 	// Trigger stream removal by sending a game server update.
 	sc.sendGameServerUpdate(fixture)
 	// Verify that zero streams are connected.
-	assert.Nil(t, waitConnectedStreamCount(sc, 0))
+	assert.NoError(t, waitConnectedStreamCount(sc, 0))
 }
 
 func TestSDKServerUpdateEventHandler(t *testing.T) {
@@ -902,8 +894,7 @@ func TestSDKServerUpdateEventHandler(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, sc.connectedStreams)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	sc.ctx = ctx
 	sc.informerFactory.Start(ctx.Done())
 
@@ -918,7 +909,7 @@ func TestSDKServerUpdateEventHandler(t *testing.T) {
 	}, time.Minute, time.Second, "Could not find the GameServer")
 	stream := newGameServerMockStream()
 	asyncWatchGameServer(t, sc, stream)
-	assert.Nil(t, waitConnectedStreamCount(sc, 1))
+	assert.NoError(t, waitConnectedStreamCount(sc, 1))
 
 	// need to add it before it can be modified
 	fakeWatch.Add(fixture.DeepCopy())
@@ -976,13 +967,11 @@ func TestSDKServerReserveTimeoutOnRun(t *testing.T) {
 	assert.True(t, cache.WaitForCacheSync(ctx.Done(), sc.gameServerSynced))
 
 	wg := sync.WaitGroup{}
-	wg.Add(1)
 
-	go func() {
+	wg.Go(func() {
 		err = sc.Run(ctx)
-		assert.Nil(t, err)
-		wg.Done()
-	}()
+		assert.NoError(t, err)
+	})
 
 	select {
 	case gsStatus := <-updated:
@@ -1031,13 +1020,11 @@ func TestSDKServerReserveTimeout(t *testing.T) {
 	assert.True(t, cache.WaitForCacheSync(ctx.Done(), sc.gameServerSynced))
 
 	wg := sync.WaitGroup{}
-	wg.Add(1)
 
-	go func() {
+	wg.Go(func() {
 		err = sc.Run(ctx)
-		assert.Nil(t, err)
-		wg.Done()
-	}()
+		assert.NoError(t, err)
+	})
 
 	assertStateChange := func(expected agonesv1.GameServerState, additional func(status agonesv1.GameServerStatus)) {
 		select {
@@ -1329,13 +1316,11 @@ func TestSDKServerUpdateCounter(t *testing.T) {
 			assert.True(t, cache.WaitForCacheSync(ctx.Done(), sc.gameServerSynced))
 
 			wg := sync.WaitGroup{}
-			wg.Add(1)
 
-			go func() {
+			wg.Go(func() {
 				err = sc.Run(ctx)
 				assert.NoError(t, err)
-				wg.Done()
-			}()
+			})
 
 			// check initial value comes through
 			require.Eventually(t, func() bool {
@@ -1797,9 +1782,6 @@ func TestSDKServerUpdateList(t *testing.T) {
 			expectedUpdatesQueueLen: 0,
 		},
 	}
-	// Maximum capacity for the game server list.
-	// of game server items the system can manage at once.
-	GameServerListMaxCapacity = int64(1000)
 	// nolint:dupl  // Linter errors on lines are duplicate of TestSDKServerAddListValue, TestSDKServerRemoveListValue
 	for test, testCase := range fixtures {
 		t.Run(test, func(t *testing.T) {
@@ -1841,13 +1823,11 @@ func TestSDKServerUpdateList(t *testing.T) {
 			assert.True(t, cache.WaitForCacheSync(ctx.Done(), sc.gameServerSynced))
 
 			wg := sync.WaitGroup{}
-			wg.Add(1)
 
-			go func() {
+			wg.Go(func() {
 				err = sc.Run(ctx)
 				assert.NoError(t, err)
-				wg.Done()
-			}()
+			})
 
 			// check initial value comes through
 			require.Eventually(t, func() bool {
@@ -1920,342 +1900,7 @@ func TestDeleteValues(t *testing.T) {
 		"PGFMEopXax": true, "qOOorODUsn": true, "rcVUwlHOME": true}
 
 	newList := deleteValues(list, toDeleteMap)
-	assert.Equal(t, len(list)-len(toDeleteMap), len(newList))
-}
-
-func TestSDKServerPlayerCapacity(t *testing.T) {
-	t.Parallel()
-	agruntime.FeatureTestMutex.Lock()
-	defer agruntime.FeatureTestMutex.Unlock()
-
-	err := agruntime.ParseFeatures(string(agruntime.FeaturePlayerTracking) + "=true")
-	require.NoError(t, err, "Can not parse FeaturePlayerTracking feature")
-
-	m := agtesting.NewMocks()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	sc, err := defaultSidecar(m)
-	require.NoError(t, err)
-
-	gs := agonesv1.GameServer{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "test", Namespace: "default", ResourceVersion: "0",
-		},
-		Spec: agonesv1.GameServerSpec{
-			SdkServer: agonesv1.SdkServer{
-				LogLevel: "Debug",
-			},
-			Players: &agonesv1.PlayersSpec{
-				InitialCapacity: 10,
-			},
-		},
-	}
-	gs.ApplyDefaults()
-
-	m.AgonesClient.AddReactor("list", "gameservers", func(_ k8stesting.Action) (bool, runtime.Object, error) {
-		return true, &agonesv1.GameServerList{Items: []agonesv1.GameServer{*gs.DeepCopy()}}, nil
-	})
-
-	updated := make(chan int64, 10)
-	m.AgonesClient.AddReactor("patch", "gameservers", func(action k8stesting.Action) (bool, runtime.Object, error) {
-
-		gsCopy := patchGameServer(t, action, &gs)
-
-		updated <- gsCopy.Status.Players.Capacity
-		return true, gsCopy, nil
-	})
-
-	assert.NoError(t, sc.WaitForConnection(ctx))
-	sc.informerFactory.Start(ctx.Done())
-	assert.True(t, cache.WaitForCacheSync(ctx.Done(), sc.gameServerSynced))
-
-	go func() {
-		err = sc.Run(ctx)
-		assert.NoError(t, err)
-	}()
-
-	// check initial value comes through
-
-	// async, so check after a period
-	err = wait.PollUntilContextTimeout(context.Background(), time.Second, 10*time.Second, true, func(_ context.Context) (bool, error) {
-		count, err := sc.GetPlayerCapacity(context.Background(), &alpha.Empty{})
-		return count.Count == 10, err
-	})
-	assert.NoError(t, err)
-
-	// on update from the SDK, the value is available from GetPlayerCapacity
-	_, err = sc.SetPlayerCapacity(context.Background(), &alpha.Count{Count: 20})
-	assert.NoError(t, err)
-
-	count, err := sc.GetPlayerCapacity(context.Background(), &alpha.Empty{})
-	require.NoError(t, err)
-	assert.Equal(t, int64(20), count.Count)
-
-	// on an update, confirm that the update hits the K8s api
-	select {
-	case value := <-updated:
-		assert.Equal(t, int64(20), value)
-	case <-time.After(time.Minute):
-		assert.Fail(t, "Should have been patched")
-	}
-
-	agtesting.AssertEventContains(t, m.FakeRecorder.Events, "PlayerCapacity Set to 20")
-}
-
-func TestSDKServerPlayerConnectAndDisconnectWithoutPlayerTracking(t *testing.T) {
-	t.Parallel()
-	agruntime.FeatureTestMutex.Lock()
-	defer agruntime.FeatureTestMutex.Unlock()
-
-	err := agruntime.ParseFeatures(string(agruntime.FeaturePlayerTracking) + "=false")
-	require.NoError(t, err, "Can not parse FeaturePlayerTracking feature")
-
-	fixture := &agonesv1.GameServer{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
-		},
-		Status: agonesv1.GameServerStatus{
-			State: agonesv1.GameServerStateReady,
-		},
-	}
-
-	m := agtesting.NewMocks()
-	m.AgonesClient.AddReactor("list", "gameservers", func(_ k8stesting.Action) (bool, runtime.Object, error) {
-		return true, &agonesv1.GameServerList{Items: []agonesv1.GameServer{*fixture}}, nil
-	})
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	sc, err := defaultSidecar(m)
-	require.NoError(t, err)
-
-	assert.NoError(t, sc.WaitForConnection(ctx))
-	sc.informerFactory.Start(ctx.Done())
-	assert.True(t, cache.WaitForCacheSync(ctx.Done(), sc.gameServerSynced))
-
-	go func() {
-		err = sc.Run(ctx)
-		assert.NoError(t, err)
-	}()
-
-	// check initial value comes through
-	// async, so check after a period
-	e := &alpha.Empty{}
-	err = wait.PollUntilContextTimeout(context.Background(), time.Second, 10*time.Second, true, func(_ context.Context) (bool, error) {
-		count, err := sc.GetPlayerCapacity(context.Background(), e)
-
-		assert.Nil(t, count)
-		return false, err
-	})
-	assert.Error(t, err)
-
-	count, err := sc.GetPlayerCount(context.Background(), e)
-	require.Error(t, err)
-	assert.Nil(t, count)
-
-	list, err := sc.GetConnectedPlayers(context.Background(), e)
-	require.Error(t, err)
-	assert.Nil(t, list)
-
-	id := &alpha.PlayerID{PlayerID: "test-player"}
-
-	ok, err := sc.PlayerConnect(context.Background(), id)
-	require.Error(t, err)
-	assert.False(t, ok.Bool)
-
-	ok, err = sc.IsPlayerConnected(context.Background(), id)
-	require.Error(t, err)
-	assert.False(t, ok.Bool)
-
-	ok, err = sc.PlayerDisconnect(context.Background(), id)
-	require.Error(t, err)
-	assert.False(t, ok.Bool)
-}
-
-func TestSDKServerPlayerConnectAndDisconnect(t *testing.T) {
-	t.Parallel()
-	agruntime.FeatureTestMutex.Lock()
-	defer agruntime.FeatureTestMutex.Unlock()
-
-	err := agruntime.ParseFeatures(string(agruntime.FeaturePlayerTracking) + "=true")
-	require.NoError(t, err, "Can not parse FeaturePlayerTracking feature")
-
-	m := agtesting.NewMocks()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	sc, err := defaultSidecar(m)
-	require.NoError(t, err)
-
-	capacity := int64(3)
-	gs := agonesv1.GameServer{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "test", Namespace: "default", ResourceVersion: "0",
-		},
-		Spec: agonesv1.GameServerSpec{
-			SdkServer: agonesv1.SdkServer{
-				LogLevel: "Debug",
-			},
-			// this is here to give us a reference, so we know when sc.Run() has completed.
-			Players: &agonesv1.PlayersSpec{
-				InitialCapacity: capacity,
-			},
-		},
-	}
-	gs.ApplyDefaults()
-
-	m.AgonesClient.AddReactor("list", "gameservers", func(_ k8stesting.Action) (bool, runtime.Object, error) {
-		return true, &agonesv1.GameServerList{Items: []agonesv1.GameServer{*gs.DeepCopy()}}, nil
-	})
-
-	updated := make(chan *agonesv1.PlayerStatus, 10)
-	m.AgonesClient.AddReactor("patch", "gameservers", func(action k8stesting.Action) (bool, runtime.Object, error) {
-		gsCopy := patchGameServer(t, action, &gs)
-		updated <- gsCopy.Status.Players
-		return true, gsCopy, nil
-	})
-
-	assert.NoError(t, sc.WaitForConnection(ctx))
-	sc.informerFactory.Start(ctx.Done())
-	assert.True(t, cache.WaitForCacheSync(ctx.Done(), sc.gameServerSynced))
-
-	go func() {
-		err = sc.Run(ctx)
-		assert.NoError(t, err)
-	}()
-
-	// check initial value comes through
-	// async, so check after a period
-	e := &alpha.Empty{}
-	err = wait.PollUntilContextTimeout(context.Background(), time.Second, 10*time.Second, true, func(_ context.Context) (bool, error) {
-		count, err := sc.GetPlayerCapacity(context.Background(), e)
-		return count.Count == capacity, err
-	})
-	assert.NoError(t, err)
-
-	count, err := sc.GetPlayerCount(context.Background(), e)
-	require.NoError(t, err)
-	assert.Equal(t, int64(0), count.Count)
-
-	list, err := sc.GetConnectedPlayers(context.Background(), e)
-	require.NoError(t, err)
-	assert.Empty(t, list.List)
-
-	ok, err := sc.IsPlayerConnected(context.Background(), &alpha.PlayerID{PlayerID: "1"})
-	require.NoError(t, err)
-	assert.False(t, ok.Bool, "no player connected yet")
-
-	// sdk value should always be correct, even if we send more than one update per second.
-	for i := int64(0); i < capacity; i++ {
-		token := strconv.FormatInt(i, 10)
-		id := &alpha.PlayerID{PlayerID: token}
-		ok, err := sc.PlayerConnect(context.Background(), id)
-		require.NoError(t, err)
-		assert.True(t, ok.Bool, "Player "+token+" should not yet be connected")
-
-		ok, err = sc.IsPlayerConnected(context.Background(), id)
-		require.NoError(t, err)
-		assert.True(t, ok.Bool, "Player "+token+" should be connected")
-	}
-	count, err = sc.GetPlayerCount(context.Background(), e)
-	require.NoError(t, err)
-	assert.Equal(t, capacity, count.Count)
-
-	list, err = sc.GetConnectedPlayers(context.Background(), e)
-	require.NoError(t, err)
-	assert.Equal(t, []string{"0", "1", "2"}, list.List)
-
-	// on an update, confirm that the update hits the K8s api, only once
-	select {
-	case value := <-updated:
-		assert.Equal(t, capacity, value.Count)
-		assert.Equal(t, []string{"0", "1", "2"}, value.IDs)
-	case <-time.After(5 * time.Second):
-		assert.Fail(t, "Should have been updated")
-	}
-	agtesting.AssertEventContains(t, m.FakeRecorder.Events, "PlayerCount Set to 3")
-
-	// confirm there was only one update
-	select {
-	case <-updated:
-		assert.Fail(t, "There should be only one update for the player connections")
-	case <-time.After(2 * time.Second):
-	}
-
-	// should return an error if we try and add another, since we're at capacity
-	nopePlayer := &alpha.PlayerID{PlayerID: "nope"}
-	_, err = sc.PlayerConnect(context.Background(), nopePlayer)
-	assert.EqualError(t, err, "players are already at capacity")
-
-	// sdk value should always be correct, even if we send more than one update per second.
-	// let's leave one player behind
-	for i := int64(0); i < capacity-1; i++ {
-		token := strconv.FormatInt(i, 10)
-		id := &alpha.PlayerID{PlayerID: token}
-		ok, err := sc.PlayerDisconnect(context.Background(), id)
-		require.NoError(t, err)
-		assert.Truef(t, ok.Bool, "Player %s should be disconnected", token)
-
-		ok, err = sc.IsPlayerConnected(context.Background(), id)
-		require.NoError(t, err)
-		assert.Falsef(t, ok.Bool, "Player %s should be connected", token)
-	}
-	count, err = sc.GetPlayerCount(context.Background(), e)
-	require.NoError(t, err)
-	assert.Equal(t, int64(1), count.Count)
-
-	list, err = sc.GetConnectedPlayers(context.Background(), e)
-	require.NoError(t, err)
-	assert.Equal(t, []string{"2"}, list.List)
-
-	// on an update, confirm that the update hits the K8s api, only once
-	select {
-	case value := <-updated:
-		assert.Equal(t, int64(1), value.Count)
-		assert.Equal(t, []string{"2"}, value.IDs)
-	case <-time.After(5 * time.Second):
-		assert.Fail(t, "Should have been updated")
-	}
-	agtesting.AssertEventContains(t, m.FakeRecorder.Events, "PlayerCount Set to 1")
-
-	// confirm there was only one update
-	select {
-	case <-updated:
-		assert.Fail(t, "There should be only one update for the player disconnections")
-	case <-time.After(2 * time.Second):
-	}
-
-	// last player is still there
-	ok, err = sc.IsPlayerConnected(context.Background(), &alpha.PlayerID{PlayerID: "2"})
-	require.NoError(t, err)
-	assert.True(t, ok.Bool, "Player 2 should be connected")
-
-	// finally, check idempotency of connect and disconnect
-	id := &alpha.PlayerID{PlayerID: "2"} // only one left behind
-	ok, err = sc.PlayerConnect(context.Background(), id)
-	require.NoError(t, err)
-	assert.False(t, ok.Bool, "Player 2 should already be connected")
-	count, err = sc.GetPlayerCount(context.Background(), e)
-	require.NoError(t, err)
-	assert.Equal(t, int64(1), count.Count)
-
-	// no longer there.
-	id.PlayerID = "0"
-	ok, err = sc.PlayerDisconnect(context.Background(), id)
-	require.NoError(t, err)
-	assert.False(t, ok.Bool, "Player 2 should already be disconnected")
-	count, err = sc.GetPlayerCount(context.Background(), e)
-	require.NoError(t, err)
-	assert.Equal(t, int64(1), count.Count)
-
-	agtesting.AssertNoEvent(t, m.FakeRecorder.Events)
-
-	list, err = sc.GetConnectedPlayers(context.Background(), e)
-	require.NoError(t, err)
-	assert.Equal(t, []string{"2"}, list.List)
+	assert.Len(t, newList, len(list)-len(toDeleteMap))
 }
 
 func TestSDKServerGracefulTerminationInterrupt(t *testing.T) {
@@ -2278,7 +1923,7 @@ func TestSDKServerGracefulTerminationInterrupt(t *testing.T) {
 		return true, &agonesv1.GameServerList{Items: []agonesv1.GameServer{*gs.DeepCopy()}}, nil
 	})
 	sc, err := defaultSidecar(m)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	sdkCtx := sc.NewSDKServerContext(ctx)
@@ -2287,13 +1932,11 @@ func TestSDKServerGracefulTerminationInterrupt(t *testing.T) {
 	assert.True(t, cache.WaitForCacheSync(sdkCtx.Done(), sc.gameServerSynced))
 
 	wg := sync.WaitGroup{}
-	wg.Add(1)
 
-	go func() {
+	wg.Go(func() {
 		err := sc.Run(sdkCtx)
-		assert.Nil(t, err)
-		wg.Done()
-	}()
+		assert.NoError(t, err)
+	})
 
 	assertContextCancelled := func(expected error, timeout time.Duration, ctx context.Context) {
 		select {
@@ -2311,7 +1954,7 @@ func TestSDKServerGracefulTerminationInterrupt(t *testing.T) {
 	cancel()
 	// Assert ctx is cancelled and sdkCtx is not cancelled
 	assertContextCancelled(context.Canceled, 1*time.Second, ctx)
-	assert.Nil(t, sdkCtx.Err())
+	assert.NoError(t, sdkCtx.Err())
 	//	Assert gs is still requestReady
 	assert.Equal(t, agonesv1.GameServerStateRequestReady, sc.gsState)
 	// gs Shutdown
@@ -2344,7 +1987,7 @@ func TestSDKServerGracefulTerminationShutdown(t *testing.T) {
 	})
 
 	sc, err := defaultSidecar(m)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	sdkCtx := sc.NewSDKServerContext(ctx)
@@ -2353,13 +1996,11 @@ func TestSDKServerGracefulTerminationShutdown(t *testing.T) {
 	assert.True(t, cache.WaitForCacheSync(sdkCtx.Done(), sc.gameServerSynced))
 
 	wg := sync.WaitGroup{}
-	wg.Add(1)
 
-	go func() {
+	wg.Go(func() {
 		err = sc.Run(sdkCtx)
-		assert.Nil(t, err)
-		wg.Done()
-	}()
+		assert.NoError(t, err)
+	})
 
 	assertContextCancelled := func(expected error, timeout time.Duration, ctx context.Context) {
 		select {
@@ -2378,8 +2019,8 @@ func TestSDKServerGracefulTerminationShutdown(t *testing.T) {
 	fakeWatch.Modify(gs.DeepCopy())
 
 	// assert none of the context have been cancelled
-	assert.Nil(t, sdkCtx.Err())
-	assert.Nil(t, ctx.Err())
+	assert.NoError(t, sdkCtx.Err())
+	assert.NoError(t, ctx.Err())
 	//	Mock interruption signal
 	cancel()
 	// Assert ctx is cancelled and sdkCtx is not cancelled
@@ -2409,10 +2050,9 @@ func TestSDKServerGracefulTerminationGameServerStateChannel(t *testing.T) {
 	})
 
 	sc, err := defaultSidecar(m)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	sdkCtx := sc.NewSDKServerContext(ctx)
 	sc.informerFactory.Start(sdkCtx.Done())
 	assert.True(t, cache.WaitForCacheSync(sdkCtx.Done(), sc.gameServerSynced))
@@ -2429,7 +2069,7 @@ func TestSDKServerGracefulTerminationGameServerStateChannel(t *testing.T) {
 }
 
 func defaultSidecar(m agtesting.Mocks) (*SDKServer, error) {
-	server, err := NewSDKServer("test", "default", m.KubeClient, m.AgonesClient, logrus.DebugLevel, 8080, 500*time.Millisecond)
+	server, err := NewSDKServer("test", "default", m.KubeClient, m.AgonesClient, logrus.DebugLevel, 8080, 500*time.Millisecond, defaultTestListMaxCapacity)
 	if err != nil {
 		return server, err
 	}
@@ -2455,11 +2095,12 @@ func waitConnectedStreamCount(sc *SDKServer, count int) error { //nolint:unparam
 }
 
 func asyncWatchGameServer(t *testing.T, sc *SDKServer, stream sdk.SDK_WatchGameServerServer) {
+	t.Helper()
 	// Note that WatchGameServer() uses getGameServer() and would block
 	// if gsWaitForSync is not Done().
 	go func() {
 		err := sc.WatchGameServer(&sdk.Empty{}, stream)
-		require.NoError(t, err)
+		assert.NoError(t, err)
 	}()
 }
 
@@ -2512,6 +2153,85 @@ func TestSetAnnotation_NilAndOverlimit(t *testing.T) {
 			st, ok := status.FromError(err)
 			assert.True(t, ok)
 			assert.Equal(t, codes.InvalidArgument, st.Code())
+		})
+	}
+}
+
+// TestSDKServerUpdateListMaxCapacity verifies that UpdateList range-checks against the limit the
+// SDKServer was constructed with, rather than a hardcoded 1000. In a cluster that limit originates
+// from the `gameservers.lists.maxItems` Helm value, arriving via the MAX_LIST_ITEMS env var.
+func TestSDKServerUpdateListMaxCapacity(t *testing.T) {
+	t.Parallel()
+	agruntime.FeatureTestMutex.Lock()
+	defer agruntime.FeatureTestMutex.Unlock()
+
+	require.NoError(t, agruntime.ParseFeatures(string(agruntime.FeatureCountsAndLists)+"=true"))
+
+	const listMaxCapacity = int64(25)
+
+	fixtures := map[string]struct {
+		capacity int64
+		wantErr  bool
+	}{
+		"at the configured maximum":    {capacity: listMaxCapacity, wantErr: false},
+		"above the configured maximum": {capacity: listMaxCapacity + 1, wantErr: true},
+		// Would have been accepted under the old hardcoded [0,1000] check.
+		"between the configured maximum and the old hardcoded 1000": {capacity: 500, wantErr: true},
+		"negative": {capacity: -1, wantErr: true},
+	}
+
+	for test, testCase := range fixtures {
+		t.Run(test, func(t *testing.T) {
+			m := agtesting.NewMocks()
+
+			gs := agonesv1.GameServer{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test", Namespace: "default", ResourceVersion: "0", Generation: 1,
+				},
+				Spec: agonesv1.GameServerSpec{
+					SdkServer: agonesv1.SdkServer{LogLevel: "Debug"},
+				},
+				Status: agonesv1.GameServerStatus{
+					Lists: map[string]agonesv1.ListStatus{
+						// Deliberately not named "players": the removed GsListsMaxItems only ever
+						// discovered a limit from a list with that name.
+						"rooms": {Values: []string{"one"}, Capacity: int64(5)},
+					},
+				},
+			}
+			gs.ApplyDefaults()
+
+			m.AgonesClient.AddReactor("list", "gameservers", func(_ k8stesting.Action) (bool, runtime.Object, error) {
+				return true, &agonesv1.GameServerList{Items: []agonesv1.GameServer{*gs.DeepCopy()}}, nil
+			})
+			m.AgonesClient.AddReactor("patch", "gameservers", func(action k8stesting.Action) (bool, runtime.Object, error) {
+				return true, patchGameServer(t, action, &gs), nil
+			})
+
+			ctx := t.Context()
+
+			sc, err := NewSDKServer("test", "default", m.KubeClient, m.AgonesClient,
+				logrus.DebugLevel, 8080, 500*time.Millisecond, listMaxCapacity)
+			require.NoError(t, err)
+			sc.recorder = m.FakeRecorder
+
+			require.NoError(t, sc.WaitForConnection(ctx))
+			sc.informerFactory.Start(ctx.Done())
+			require.True(t, cache.WaitForCacheSync(ctx.Done(), sc.gameServerSynced))
+			sc.gsWaitForSync.Done()
+
+			_, err = sc.UpdateList(ctx, &beta.UpdateListRequest{
+				List:       &beta.List{Name: "rooms", Capacity: testCase.capacity},
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"capacity"}},
+			})
+
+			if testCase.wantErr {
+				require.Error(t, err)
+				// The limit must be reported accurately, not as the old hardcoded [0,1000].
+				assert.Contains(t, err.Error(), "Capacity must be within range [0,25]")
+			} else {
+				require.NoError(t, err)
+			}
 		})
 	}
 }
