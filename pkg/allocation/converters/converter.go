@@ -237,10 +237,10 @@ func convertGameServerSelectorToInternalGameServerSelector(in *pb.GameServerSele
 		result.Counters = map[string]allocationv1.CounterSelector{}
 		for k, v := range in.GetCounters() {
 			result.Counters[k] = allocationv1.CounterSelector{
-				MinCount:     v.MinCount,
-				MaxCount:     v.MaxCount,
-				MinAvailable: v.MinAvailable,
-				MaxAvailable: v.MaxAvailable,
+				MinCount:     v.GetMinCount(),
+				MaxCount:     v.GetMaxCount(),
+				MinAvailable: v.GetMinAvailable(),
+				MaxAvailable: v.GetMaxAvailable(),
 			}
 		}
 	}
@@ -248,9 +248,9 @@ func convertGameServerSelectorToInternalGameServerSelector(in *pb.GameServerSele
 		result.Lists = map[string]allocationv1.ListSelector{}
 		for k, v := range in.GetLists() {
 			result.Lists[k] = allocationv1.ListSelector{
-				ContainsValue: v.ContainsValue,
-				MinAvailable:  v.MinAvailable,
-				MaxAvailable:  v.MaxAvailable,
+				ContainsValue: v.GetContainsValue(),
+				MinAvailable:  v.GetMinAvailable(),
+				MaxAvailable:  v.GetMaxAvailable(),
 			}
 		}
 	}
@@ -401,10 +401,10 @@ func ConvertAllocationResponseToGSA(in *pb.AllocationResponse, rs string) *alloc
 	}
 
 	if in.Counters != nil {
-		out.Status.Counters = convertAllocationCountersToGSACounters(in.Counters)
+		out.Status.Counters = convertAllocationCountersToGSACounters(in.GetCounters())
 	}
 	if in.Lists != nil {
-		out.Status.Lists = convertAllocationListsToGSALists(in.Lists)
+		out.Status.Lists = convertAllocationListsToGSALists(in.GetLists())
 	}
 
 	out.SetGroupVersionKind(allocationv1.SchemeGroupVersion.WithKind("GameServerAllocation"))
