@@ -158,14 +158,22 @@ Destroy the cluster as soon as the run is finished, using the same form you used
 cd build; make shell
 cd build/terraform/performance
 terraform init -backend-config="bucket=<PROJECT>-performance-infra-bucket-tfstate" -backend-config="prefix=terraform/state"
-
-# Project where the e2e firewall rules already exist (e.g. agones-images):
-# destroys only the cluster and leaves the firewall rules in place.
-terraform destroy -var project="<PROJECT>" -target=module.gke_standard_cluster
-
-# Fresh project: destroys the cluster and the firewall rules.
-terraform destroy -var project="<PROJECT>"
 ```
+
+Then run only the destroy command that matches how you applied:
+
+* **Project where the e2e firewall rules already exist** (e.g. `agones-images`): target only the
+  cluster module, so the existing firewall rules are left in place:
+
+  ```bash
+  terraform destroy -var project="<PROJECT>" -target=module.gke_standard_cluster
+  ```
+
+* **Fresh project**: destroy everything, including the firewall rules:
+
+  ```bash
+  terraform destroy -var project="<PROJECT>"
+  ```
 
 Then delete the state bucket. It is versioned and `force_destroy` is `false`, so empty it
 (including old object versions) before deleting it:
